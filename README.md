@@ -11,23 +11,23 @@ Point it at a folder of assembled bacterial genomes, pick a scheme, and explore 
 ## Screenshots
 
 ### 1. Welcome
-![Welcome](docs/screens/01_welcome.png)
+![Welcome](docs/screens/01_welcome_v3.png)
 The starting view. The sidebar walks you through five steps: pick a folder, pick a scheme, set options, run, and adjust the display.
 
 ### 2. Built-in folder browser
-![Folder browser](docs/screens/02_browse.png)
+![Folder browser](docs/screens/02_browse_v3.png)
 Click **Browse…** to navigate your filesystem from inside the browser — no need to type long paths. It tells you how many FASTA files are in each folder before you commit.
 
 ### 3. The minimum spanning tree
-![MST](docs/screens/03_mst.png)
-A 67-isolate *Staphylococcus aureus* cgMLST tree (1716 loci). Each node is one isolate; edge labels are the pairwise allele difference. Nodes are colored automatically by cluster — soft pastels chosen for legibility, with a legend in the corner. Drag any node to rearrange. Scroll to zoom. Right-click drag to pan.
+![MST](docs/screens/03_mst_v3.png)
+A 67-isolate *Staphylococcus aureus* cgMLST tree (1716 loci). MSTs are centroid-free by definition — MLSTudio uses an `fcose` force-directed layout where **edge length is proportional to allele distance**, so visually close isolates really are genetically close. Nodes are colored by cluster, sample labels are always visible, and a default cluster halo highlights the closest pair.
 
-### 4. Cluster halos
-![Cluster halos](docs/screens/04_clusters.png)
-Set a **cluster halo distance** in the sidebar (default per-scheme — e.g. **5** for *S. aureus* cgMLST) and groups of isolates within that allele-difference get a soft pastel halo. Useful for outbreak investigation, where clones cluster within a few allele differences.
+### 4. Named cluster hulls
+![Cluster halos](docs/screens/04_clusters_v3.png)
+Slide the **cluster halo distance** up and outbreak-style groups appear as soft pastel hulls — labeled **Cluster 1, Cluster 2, …** — drawn on a canvas overlay so they pan and zoom with the tree. At the *S. aureus* cgMLST suggested 5-allele threshold you'll see clonal pairs only; at 24–32 you see the broader CC structure.
 
 ### 5. Results table
-![Results table](docs/screens/05_table.png)
+![Results table](docs/screens/05_table_v3.png)
 Per-isolate Sequence Types, per-locus allele calls, EXC/INF/LNF flags, and free-text notes. Scrollable, sortable, and exported alongside the tree.
 
 ---
@@ -93,10 +93,21 @@ Adding more schemes is a one-line edit to `src/mlstudio/schemes/bigsdb.py`'s `RE
 | Zoom | Scroll wheel |
 | Fit everything to screen | **Fit to screen** button |
 | Hide edges above a distance | **Edge label threshold** slider |
-| Group close isolates in a halo | **Cluster halo distance** field |
+| Group close isolates into a named hull | **Cluster halo distance** slider |
+| Switch missing-data treatment | **Missing-data policy** dropdown — see below |
 | Color by an uploaded field | **Color nodes by** dropdown |
 | Toggle sample labels | **Show sample labels** checkbox |
 | Export | **Export PNG** (high-DPI, white background) |
+
+## Missing-data policy
+
+When you have partial assemblies, some loci are LNF (locus not found). Three policies for how that affects pairwise distance — switch live from the sidebar; the MST is recomputed on the server in seconds:
+
+| Policy | What it does | When to use |
+|--------|--------------|-------------|
+| **Pairwise complete** (default) | Only loci present in both isolates contribute. | Standard for cgMLST in SeqSphere-style tools. |
+| **Count missing as differences** | Every missing locus counts as one allele difference. | Conservative — pushes apart isolates with poor calling. |
+| **Pairwise complete, scaled** | Pairwise-complete distance scaled to the full locus count: d × n_loci / n_shared. | Keeps the magnitude comparable across pairs with different overlap. |
 
 The visual parameters (node size, edge thickness, label visibility) auto-tune to dataset size — from a handful of isolates up to 5000+ — so the tree stays legible on screens from a laptop to a 4K display.
 

@@ -352,12 +352,9 @@ function autoScale(nNodes) {
            ideal: 60, repulse: 5500, edgeMax: 1.5 };
 }
 
-// Radial tree layout — the MST is, topologically, a tree. We place the
-// graph center at the origin and recursively subdivide the available angle
-// among children based on how many leaves their subtree contains, with the
-// radial distance scaled by the edge weight. Produces a crossing-free
-// "explosion" layout, which is what people associate with SeqSphere-style
-// MST visualizations.
+// Kept as a fallback. Not the primary layout — MSTs are centroid-free by
+// definition, so the main layout uses fcose with edge-weight-proportional
+// ideal lengths. radialTreeLayout is only used if fcose fails to register.
 function radialTreeLayout(elements, scale) {
   const nodeEls = elements.filter(e => !e.data.source);
   const edgeEls = elements.filter(e => e.data.source);
@@ -448,15 +445,53 @@ function radialTreeLayout(elements, scale) {
   return pos;
 }
 
+// fcose probe — check if the extension actually registered
+function hasFcose() {
+  try {
+    const probe = cytoscape({ headless: true, elements: [] });
+    const ok = !!probe.layout({ name: 'fcose' });
+    probe.destroy();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function mstLayout(nNodes, scale, elements) {
-  if (!elements) return { name: 'preset', fit: true, padding: 60 };
+  // Map edge weight (allele distance) → ideal pixel length.
+  // Linear with a small constant so even identical isolates still
+  // get a visible gap, and capped to keep very-distant edges sane.
+  const wToPx = (w) => Math.min(420, 40 + w * 4);
+
+  if (hasFcose()) {
+    return {
+      name: 'fcose',
+      quality: nNodes <= 200 ? 'proof' : 'default',
+      randomize: true,
+      animate: false,
+      nodeDimensionsIncludeLabels: true,
+      fit: true,
+      padding: 60,
+      // Edge length proportional to its weight — this is the whole point.
+      idealEdgeLength: (edge) => wToPx(edge.data('weight') || 1),
+      nodeRepulsion: () => scale.repulse,
+      edgeElasticity: () => 0.45,
+      nestingFactor: 0.1,
+      gravity: 0.18,
+      gravityRange: 3.5,
+      gravityCompound: 1.0,
+      numIter: nNodes <= 100 ? 5000 : 3000,
+      tile: false,
+      uniformNodeDimensions: false,
+      packComponents: true,
+    };
+  }
+  // Fallback: deterministic radial tree (less ideal but always works)
   const positions = radialTreeLayout(elements, scale);
   return {
     name: 'preset',
     positions: (n) => positions[n.id()] || { x: 0, y: 0 },
-    fit: true,
-    padding: 60,
-    animate: false,
+    fit: true, padding: 60, animate: false,
   };
 }
 
@@ -513,29 +548,7 @@ function renderMst() {
           'text-outline-color': '#ffffff',
         }
       },
-      {
-        selector: 'node.cluster',
-        style: {
-          'background-color': 'data(_color)',
-          'background-opacity': 0.42,
-          'border-color': 'data(_color)',
-          'border-width': 1.5,
-          'border-opacity': 0.7,
-          'border-style': 'dashed',
-          'shape': 'ellipse',
-          'padding': '40px',
-          'label': 'data(_label)',
-          'color': 'data(_color)',
-          'font-size': '13px',
-          'font-weight': 700,
-          'text-valign': 'top',
-          'text-halign': 'center',
-          'text-margin-y': -10,
-          'text-outline-color': '#ffffff',
-          'text-outline-width': 2,
-          'z-index': 0,
-        }
-      },
+      // Cluster halos are now rendered on an overlay canvas — no compound parents.
       {
         selector: 'edge',
         style: {
@@ -572,60 +585,201 @@ function renderMst() {
     const d = evt.target.data();
     console.log('Node:', d);
   });
+  // Re-render hulls on every viewport change
+  state.cy.on('render pan zoom drag', () => redrawHulls());
 
+  ensureHullCanvas();
   applyClusters();
   renderLegend(initialField, state.currentPalette);
 }
 
+// Cluster info is computed but rendered as canvas hulls — see drawHulls()
 function applyClusters() {
-  if (!state.cy) return;
-  // Remove existing cluster parents
-  state.cy.nodes('.cluster').remove();
-  state.cy.nodes().forEach(n => n.move({ parent: null }));
-
+  if (!state.cy || !state.mst) return;
   const threshold = parseInt($('cluster-threshold').value) || 0;
   state.clusterThreshold = threshold;
-  if (threshold < 0 || !state.mst) return;
 
-  const clusters = computeClusters(state.mst, threshold);
-  if (!clusters.length) return;
-
-  const field = $('color-field').value;
-  // Add a parent node per cluster, parent → soft halo color
-  clusters.forEach((members, ci) => {
-    // Use the most-frequent field value within the cluster to pick the halo color
-    const counts = {};
-    for (const m of members) {
-      const v = state.cy.getElementById(m).data(field);
-      counts[v] = (counts[v] || 0) + 1;
-    }
-    const top = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
-    const color = state.currentPalette[top] || softColor(ci);
-
-    const parentId = `cluster_${ci}`;
-    state.cy.add({
-      group: 'nodes',
-      data: { id: parentId, _color: color, _label: `${members.length}` },
-      classes: 'cluster',
-    });
-    for (const m of members) {
-      state.cy.getElementById(m).move({ parent: parentId });
-    }
-  });
-
-  // No re-layout needed — preset positions are already correct; parent
-  // (cluster halo) nodes auto-fit around their children.
-  state.cy.fit(null, 60);
+  const groups = (threshold > 0) ? computeClusters(state.mst, threshold) : [];
+  state.clusters = groups.map((members, i) => ({
+    id: `C${i + 1}`,
+    name: `Cluster ${i + 1}`,
+    members,
+    color: softColor(i),
+  }));
+  if (state.cy) {
+    state.cy.scratch('_clusters', state.clusters);
+    redrawHulls();
+  }
 }
 
-$('cluster-threshold').addEventListener('input', () => applyClusters());
+// ---- Canvas hulls (the cluster nebula replacement) ----------------------
+
+let hullCanvas = null;
+let hullCtx = null;
+
+function ensureHullCanvas() {
+  if (hullCanvas) return;
+  const cyDiv = $('cy');
+  hullCanvas = document.createElement('canvas');
+  hullCanvas.style.position = 'absolute';
+  hullCanvas.style.inset = '0';
+  hullCanvas.style.pointerEvents = 'none';
+  hullCanvas.style.zIndex = '1';
+  cyDiv.appendChild(hullCanvas);
+  hullCtx = hullCanvas.getContext('2d');
+  new ResizeObserver(resizeHullCanvas).observe(cyDiv);
+  resizeHullCanvas();
+}
+
+function resizeHullCanvas() {
+  if (!hullCanvas) return;
+  const cyDiv = $('cy');
+  const r = cyDiv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  hullCanvas.width = r.width * dpr;
+  hullCanvas.height = r.height * dpr;
+  hullCanvas.style.width = r.width + 'px';
+  hullCanvas.style.height = r.height + 'px';
+  hullCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  redrawHulls();
+}
+
+// Andrew's monotone chain convex hull
+function convexHull(pts) {
+  pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (pts.length < 3) return pts;
+  const cross = (O, A, B) => (A[0]-O[0])*(B[1]-O[1]) - (A[1]-O[1])*(B[0]-O[0]);
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0)
+      lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0)
+      upper.pop();
+    upper.push(p);
+  }
+  upper.pop(); lower.pop();
+  return lower.concat(upper);
+}
+
+function expandHull(hull, pad) {
+  // Move each point outward from the hull centroid by `pad` pixels.
+  const cx = hull.reduce((s, p) => s + p[0], 0) / hull.length;
+  const cy = hull.reduce((s, p) => s + p[1], 0) / hull.length;
+  return hull.map(([x, y]) => {
+    const dx = x - cx, dy = y - cy;
+    const r = Math.hypot(dx, dy) || 1;
+    return [x + dx / r * pad, y + dy / r * pad];
+  });
+}
+
+function redrawHulls() {
+  if (!hullCanvas || !state.cy) return;
+  ensureHullCanvas();
+  const ctx = hullCtx;
+  ctx.clearRect(0, 0, hullCanvas.width, hullCanvas.height);
+  const clusters = state.clusters || [];
+  for (const c of clusters) {
+    const pts = c.members.map(id => {
+      const n = state.cy.getElementById(id);
+      if (!n || n.empty()) return null;
+      const p = n.renderedPosition();
+      return [p.x, p.y];
+    }).filter(Boolean);
+    if (pts.length < 2) continue;
+    const zoom = state.cy.zoom();
+    const pad = 28 + 18 * Math.min(2, zoom);
+    let outline;
+    if (pts.length === 2) {
+      // Two points: draw an ellipse rotated to align with them
+      const [a, b] = pts;
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len = Math.hypot(dx, dy);
+      const angle = Math.atan2(dy, dx);
+      ctx.save();
+      ctx.translate(mx, my); ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, len / 2 + pad, pad, 0, 0, 2 * Math.PI);
+      ctx.fillStyle = c.color + '40';
+      ctx.fill();
+      ctx.strokeStyle = c.color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.restore();
+      // Label
+      ctx.fillStyle = c.color;
+      ctx.font = 'bold 13px -apple-system, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(c.name, mx, my - pad - 6);
+      continue;
+    } else {
+      const hull = convexHull(pts);
+      outline = expandHull(hull, pad);
+    }
+    // Smooth rounded polygon
+    ctx.beginPath();
+    for (let i = 0; i < outline.length; i++) {
+      const p = outline[i];
+      const prev = outline[(i - 1 + outline.length) % outline.length];
+      const next = outline[(i + 1) % outline.length];
+      const mx1 = (prev[0] + p[0]) / 2, my1 = (prev[1] + p[1]) / 2;
+      const mx2 = (p[0] + next[0]) / 2, my2 = (p[1] + next[1]) / 2;
+      if (i === 0) ctx.moveTo(mx1, my1);
+      ctx.quadraticCurveTo(p[0], p[1], mx2, my2);
+    }
+    ctx.closePath();
+    ctx.fillStyle = c.color + '38';
+    ctx.fill();
+    ctx.strokeStyle = c.color;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.stroke();
+    // Label at hull centroid (slightly above)
+    const cx = outline.reduce((s, p) => s + p[0], 0) / outline.length;
+    const cy = outline.reduce((s, p) => s + p[1], 0) / outline.length;
+    const topY = Math.min(...outline.map(p => p[1]));
+    ctx.fillStyle = c.color;
+    ctx.font = 'bold 13px -apple-system, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(c.name, cx, topY - 8);
+  }
+  ctx.setLineDash([]);
+}
+
+$('cluster-threshold').addEventListener('input', (e) => {
+  $('cluster-threshold-val').textContent = e.target.value;
+  applyClusters();
+});
+
+$('distance-policy').addEventListener('change', async (e) => {
+  if (!state.jobId) { $('policy-status').textContent = '(no analysis loaded)'; return; }
+  $('policy-status').textContent = 'Recomputing…';
+  try {
+    const res = await api(`/jobs/${state.jobId}/recompute?policy=${e.target.value}`, { method: 'POST' });
+    state.mst = res.mst;
+    // Recompute cluster_id from new MST
+    const t = parseInt($('cluster-threshold').value) || 0;
+    attachClusterIds(state.mst, t);
+    populateColorFields();
+    renderMst();
+    $('policy-status').textContent = `Policy: ${e.target.value}`;
+  } catch (err) {
+    $('policy-status').textContent = 'Error: ' + err.message;
+  }
+});
 
 function applyColoring() {
   if (!state.cy) return;
   const field = $('color-field').value;
   const palette = paletteFor(state.mst.elements, field);
   state.currentPalette = palette;
-  state.cy.nodes(':childless').forEach(n => {
+  state.cy.nodes().forEach(n => {
     const v = n.data(field);
     n.data('_color', palette[v] || '#94a3b8');
   });

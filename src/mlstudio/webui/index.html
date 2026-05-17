@@ -75,20 +75,33 @@
     </section>
 
     <section class="panel">
-      <h2>5 · Display</h2>
+      <h2>5 · Distance</h2>
+      <label class="field">
+        <span>Missing-data policy</span>
+        <select id="distance-policy">
+          <option value="pairwise_complete" selected>Pairwise complete (ignore missing)</option>
+          <option value="count_missing">Count missing as differences</option>
+          <option value="scaled">Pairwise complete, scaled to full locus count</option>
+        </select>
+      </label>
+      <div class="muted small" id="policy-status"></div>
+    </section>
+
+    <section class="panel">
+      <h2>6 · Display</h2>
       <label class="field">
         <span>Color nodes by</span>
         <select id="color-field"><option value="cluster_id">cluster_id</option><option value="st">ST</option></select>
       </label>
       <label class="field">
+        <span>Cluster halo distance</span>
+        <input id="cluster-threshold" type="range" min="0" max="200" value="0" />
+        <div class="row"><span class="muted small">≤ alleles apart → one cluster</span><span id="cluster-threshold-val">0</span></div>
+      </label>
+      <label class="field">
         <span>Edge label threshold</span>
         <input id="threshold" type="range" min="0" max="100" value="100" />
         <div class="row"><span class="muted small">Hide edges above</span><span id="threshold-val">100</span></div>
-      </label>
-      <label class="field">
-        <span>Cluster halo distance</span>
-        <input id="cluster-threshold" type="number" min="0" value="0" />
-        <div class="row muted small">Group isolates within this allele-difference</div>
       </label>
       <label class="check"><input type="checkbox" id="show-labels" checked /> Show sample labels</label>
       <button id="export-png" class="ghost">Export PNG</button>
@@ -96,7 +109,7 @@
     </section>
 
     <section class="panel">
-      <h2>6 · Scheme catalog</h2>
+      <h2>7 · Scheme catalog</h2>
       <div id="catalog-list"></div>
     </section>
   </aside>

@@ -53,6 +53,10 @@ class Job:
         self.amr_results: dict[str, list[dict[str, Any]]] = {}
         self.mst: dict[str, Any] | None = None
         self.metadata: dict[str, dict[str, Any]] = {}
+        self.profiles: dict[str, list[str | None]] = {}
+        self.scheme_loci: list[str] = []
+        self.scheme_cluster_threshold: int = 0
+        self.distance_policy: str = "pairwise_complete"
         self.error: str | None = None
         self.subscribers: list[asyncio.Queue] = []
 
@@ -174,8 +178,11 @@ async def _run_job(job: Job) -> None:
             r["sample"]: [r["calls"][loc]["allele"] for loc in scheme.loci]
             for r in job.results
         }
+        job.profiles = profiles  # keep for recompute
+        job.scheme_loci = list(scheme.loci)
+        job.scheme_cluster_threshold = scheme.cluster_threshold
         if len(profiles) >= 2:
-            dm = hamming_matrix(profiles)
+            dm = hamming_matrix(profiles, policy="pairwise_complete")
             mst = build_mst(dm)
             st_by_sample = {r["sample"]: r["st"] for r in job.results}
             job.mst = mst_to_cytoscape(
@@ -298,6 +305,26 @@ def create_app() -> FastAPI:
         JOBS[job_id] = job
         asyncio.create_task(_run_job(job))
         return {"job_id": job_id}
+
+    @app.post("/api/jobs/{job_id}/recompute")
+    async def job_recompute(job_id: str, policy: str = "pairwise_complete") -> dict[str, Any]:
+        """Recompute the distance matrix + MST with a different missing-data policy."""
+        if policy not in ("pairwise_complete", "count_missing", "scaled"):
+            raise HTTPException(400, f"Bad policy: {policy}")
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "Unknown job")
+        if not job.profiles or len(job.profiles) < 2:
+            raise HTTPException(400, "Not enough samples for MST recompute")
+        dm = hamming_matrix(job.profiles, policy=policy)
+        mst = build_mst(dm)
+        st_by_sample = {r["sample"]: r["st"] for r in job.results}
+        job.mst = mst_to_cytoscape(
+            mst, job.metadata or None, st_by_sample,
+            cluster_threshold=job.scheme_cluster_threshold,
+        )
+        job.distance_policy = policy
+        return {"ok": True, "policy": policy, "mst": job.mst}
 
     @app.get("/api/jobs/{job_id}")
     async def job_status(job_id: str) -> dict[str, Any]:

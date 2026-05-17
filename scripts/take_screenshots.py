@@ -33,10 +33,13 @@ async def main() -> int:
     ap.add_argument("--out", default="docs/screens")
     ap.add_argument("--width", type=int, default=1600)
     ap.add_argument("--height", type=int, default=1000)
+    ap.add_argument("--suffix", default="_v3",
+                    help="Append to filenames (cache-busting for the README).")
     args = ap.parse_args()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    sfx = args.suffix
 
     # Pre-fetch job state via HTTP or load from disk
     injected = None
@@ -101,13 +104,13 @@ async def main() -> int:
             """
         )
         await page.wait_for_timeout(400)
-        await page.screenshot(path=str(out / "01_welcome.png"), full_page=False)
+        await page.screenshot(path=str(out / f"01_welcome{sfx}.png"), full_page=False)
         print("  ✓ 01_welcome.png")
 
         # 2. Folder browser modal
         await page.evaluate("openBrowse('/home/iowa/Desktop')")
         await page.wait_for_timeout(700)
-        await page.screenshot(path=str(out / "02_browse.png"), full_page=False)
+        await page.screenshot(path=str(out / f"02_browse{sfx}.png"), full_page=False)
         print("  ✓ 02_browse.png")
         await page.evaluate("document.getElementById('browse-modal').classList.add('hidden')")
 
@@ -147,7 +150,7 @@ async def main() -> int:
                 "document.getElementById('results-panel').classList.add('hidden')"
             )
             await page.wait_for_timeout(300)
-            await page.screenshot(path=str(out / "03_mst.png"), full_page=False)
+            await page.screenshot(path=str(out / f"03_mst{sfx}.png"), full_page=False)
             print("  ✓ 03_mst.png")
 
             # Cluster halos at a threshold that produces multiple visible
@@ -161,7 +164,7 @@ async def main() -> int:
                 """
             )
             await page.wait_for_timeout(2200)
-            await page.screenshot(path=str(out / "04_clusters.png"), full_page=False)
+            await page.screenshot(path=str(out / f"04_clusters{sfx}.png"), full_page=False)
             print("  ✓ 04_clusters.png")
 
             # Results table shot
@@ -172,7 +175,7 @@ async def main() -> int:
                 "document.getElementById('results-panel').scrollIntoView()"
             )
             await page.wait_for_timeout(300)
-            await page.screenshot(path=str(out / "05_table.png"), full_page=False)
+            await page.screenshot(path=str(out / f"05_table{sfx}.png"), full_page=False)
             print("  ✓ 05_table.png")
 
         await browser.close()
