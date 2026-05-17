@@ -340,16 +340,124 @@ function computeClusters(mst, threshold) {
 // Auto-tune visual parameters based on dataset size so the layout stays
 // legible from 5 to 5000 isolates.
 function autoScale(nNodes) {
-  if (nNodes <= 30) return { nodeSize: 48, fontSize: 12, edgeLabel: true,
-                              labels: true, ideal: 130, repulse: 22000, edgeMax: 6 };
-  if (nNodes <= 100) return { nodeSize: 34, fontSize: 11, edgeLabel: true,
-                              labels: true, ideal: 110, repulse: 18000, edgeMax: 4.5 };
-  if (nNodes <= 300) return { nodeSize: 22, fontSize: 10, edgeLabel: false,
-                              labels: false, ideal: 80, repulse: 12000, edgeMax: 3 };
-  if (nNodes <= 800) return { nodeSize: 14, fontSize: 9, edgeLabel: false,
-                              labels: false, ideal: 50, repulse: 6500, edgeMax: 2 };
-  return { nodeSize: 9, fontSize: 8, edgeLabel: false, labels: false,
-           ideal: 35, repulse: 4500, edgeMax: 1.5 };
+  if (nNodes <= 30) return { nodeSize: 50, fontSize: 12, edgeLabel: true,
+                              labels: true, ideal: 160, repulse: 30000, edgeMax: 5.5 };
+  if (nNodes <= 100) return { nodeSize: 38, fontSize: 11, edgeLabel: true,
+                              labels: true, ideal: 140, repulse: 22000, edgeMax: 4.5 };
+  if (nNodes <= 300) return { nodeSize: 24, fontSize: 10, edgeLabel: false,
+                              labels: false, ideal: 110, repulse: 14000, edgeMax: 3 };
+  if (nNodes <= 800) return { nodeSize: 16, fontSize: 9, edgeLabel: false,
+                              labels: false, ideal: 80, repulse: 8000, edgeMax: 2 };
+  return { nodeSize: 10, fontSize: 8, edgeLabel: false, labels: false,
+           ideal: 60, repulse: 5500, edgeMax: 1.5 };
+}
+
+// Radial tree layout — the MST is, topologically, a tree. We place the
+// graph center at the origin and recursively subdivide the available angle
+// among children based on how many leaves their subtree contains, with the
+// radial distance scaled by the edge weight. Produces a crossing-free
+// "explosion" layout, which is what people associate with SeqSphere-style
+// MST visualizations.
+function radialTreeLayout(elements, scale) {
+  const nodeEls = elements.filter(e => !e.data.source);
+  const edgeEls = elements.filter(e => e.data.source);
+  const ids = nodeEls.map(n => n.data.id);
+  if (ids.length === 0) return {};
+  if (ids.length === 1) return { [ids[0]]: { x: 0, y: 0 } };
+
+  const adj = {};
+  for (const id of ids) adj[id] = [];
+  for (const e of edgeEls) {
+    adj[e.data.source].push({ to: e.data.target, w: e.data.weight });
+    adj[e.data.target].push({ to: e.data.source, w: e.data.weight });
+  }
+
+  // Pick center = node with smallest sum of unweighted hops (cheap & robust).
+  function bfsHops(start) {
+    const d = { [start]: 0 };
+    const q = [start];
+    let sum = 0, max = 0;
+    while (q.length) {
+      const u = q.shift();
+      sum += d[u]; if (d[u] > max) max = d[u];
+      for (const { to } of adj[u]) if (d[to] === undefined) { d[to] = d[u] + 1; q.push(to); }
+    }
+    return { sum, max };
+  }
+  let center = ids[0], bestSum = Infinity, bestEcc = Infinity;
+  for (const id of ids) {
+    const { sum, max } = bfsHops(id);
+    if (max < bestEcc || (max === bestEcc && sum < bestSum)) {
+      bestEcc = max; bestSum = sum; center = id;
+    }
+  }
+
+  // BFS tree from center
+  const parent = { [center]: null };
+  const parentW = { [center]: 0 };
+  const children = {}; for (const id of ids) children[id] = [];
+  const visited = new Set([center]);
+  const queue = [center];
+  while (queue.length) {
+    const u = queue.shift();
+    // Sort neighbors by id for determinism then by edge weight (small first)
+    const sorted = [...adj[u]].sort((a, b) => a.w - b.w || a.to.localeCompare(b.to));
+    for (const { to, w } of sorted) {
+      if (!visited.has(to)) {
+        visited.add(to);
+        parent[to] = u;
+        parentW[to] = w;
+        children[u].push(to);
+        queue.push(to);
+      }
+    }
+  }
+
+  // Leaf counts
+  const leaves = {};
+  (function count(n) {
+    if (children[n].length === 0) { leaves[n] = 1; return 1; }
+    leaves[n] = children[n].reduce((s, c) => s + count(c), 0);
+    return leaves[n];
+  })(center);
+
+  // Place
+  const pos = {};
+  const baseR = Math.max(80, scale.ideal * 0.9);
+  const wScale = Math.max(2, baseR / 10);
+  function place(n, a0, a1, depth) {
+    const angle = (a0 + a1) / 2;
+    if (n === center) {
+      pos[n] = { x: 0, y: 0 };
+    } else {
+      const p = parent[n];
+      const r0 = Math.hypot(pos[p].x, pos[p].y);
+      const r = r0 + baseR * 0.7 + Math.log2(parentW[n] + 1) * wScale;
+      pos[n] = { x: r * Math.cos(angle), y: r * Math.sin(angle) };
+    }
+    if (children[n].length === 0) return;
+    let cur = a0;
+    for (const ch of children[n]) {
+      const span = (a1 - a0) * (leaves[ch] / leaves[n]);
+      // Apply a tiny offset so the child angles are not exactly identical to parent angle
+      place(ch, cur, cur + span, depth + 1);
+      cur += span;
+    }
+  }
+  place(center, 0, 2 * Math.PI, 0);
+  return pos;
+}
+
+function mstLayout(nNodes, scale, elements) {
+  if (!elements) return { name: 'preset', fit: true, padding: 60 };
+  const positions = radialTreeLayout(elements, scale);
+  return {
+    name: 'preset',
+    positions: (n) => positions[n.id()] || { x: 0, y: 0 },
+    fit: true,
+    padding: 60,
+    animate: false,
+  };
 }
 
 function renderMst() {
@@ -382,17 +490,7 @@ function renderMst() {
   state.cy = cytoscape({
     container: $('cy'),
     elements: elements,
-    layout: {
-      name: 'cose',
-      randomize: false,
-      animate: false,
-      nodeDimensionsIncludeLabels: true,
-      idealEdgeLength: (edge) => scale.ideal + Math.log2(edge.data('weight') + 1) * 18,
-      nodeRepulsion: scale.repulse,
-      edgeElasticity: 70,
-      gravity: 0.22,
-      numIter: nNodes <= 100 ? 3500 : 2200,
-    },
+    layout: mstLayout(nNodes, scale, elements),
     wheelSensitivity: 0.2,
     style: [
       {
@@ -419,15 +517,22 @@ function renderMst() {
         selector: 'node.cluster',
         style: {
           'background-color': 'data(_color)',
-          'background-opacity': 0.16,
+          'background-opacity': 0.42,
           'border-color': 'data(_color)',
           'border-width': 1.5,
-          'border-opacity': 0.45,
-          'border-style': 'solid',
-          'shape': 'round-rectangle',
-          'corner-radius': '40px',
-          'padding': '24px',
-          'label': '',
+          'border-opacity': 0.7,
+          'border-style': 'dashed',
+          'shape': 'ellipse',
+          'padding': '40px',
+          'label': 'data(_label)',
+          'color': 'data(_color)',
+          'font-size': '13px',
+          'font-weight': 700,
+          'text-valign': 'top',
+          'text-halign': 'center',
+          'text-margin-y': -10,
+          'text-outline-color': '#ffffff',
+          'text-outline-width': 2,
           'z-index': 0,
         }
       },
@@ -439,9 +544,10 @@ function renderMst() {
             const norm = w / Math.max(1, state.maxEdge);
             return Math.max(0.8, scale.edgeMax * (1 - 0.7 * norm));
           },
-          'line-color': '#cbd5e1',
-          'line-opacity': nNodes > 300 ? 0.55 : 0.85,
-          'curve-style': 'straight',
+          'line-color': '#94a3b8',
+          'line-opacity': nNodes > 300 ? 0.5 : 0.7,
+          'curve-style': 'bezier',
+          'control-point-step-size': 30,
           'label': scale.edgeLabel ? 'data(label)' : '',
           'font-size': scale.fontSize + 'px',
           'color': '#64748b',
@@ -499,7 +605,7 @@ function applyClusters() {
     const parentId = `cluster_${ci}`;
     state.cy.add({
       group: 'nodes',
-      data: { id: parentId, _color: color, label: '' },
+      data: { id: parentId, _color: color, _label: `${members.length}` },
       classes: 'cluster',
     });
     for (const m of members) {
@@ -507,12 +613,9 @@ function applyClusters() {
     }
   });
 
-  // Re-run layout to settle parent boxes
-  state.cy.layout({
-    name: 'cose', randomize: false, animate: false,
-    nodeDimensionsIncludeLabels: true, idealEdgeLength: 110,
-    nodeRepulsion: 18000, edgeElasticity: 70, gravity: 0.25, numIter: 1500,
-  }).run();
+  // No re-layout needed — preset positions are already correct; parent
+  // (cluster halo) nodes auto-fit around their children.
+  state.cy.fit(null, 60);
 }
 
 $('cluster-threshold').addEventListener('input', () => applyClusters());

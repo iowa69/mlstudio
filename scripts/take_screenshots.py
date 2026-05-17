@@ -79,10 +79,26 @@ async def main() -> int:
         )
         page = await ctx.new_page()
 
-        # 1. Welcome screen
+        # 1. Welcome screen — set scheme dropdown so it reads correctly in all shots
         await page.goto(args.base_url)
         await page.wait_for_function(
             "document.querySelectorAll('#scheme-select option').length > 0",
+        )
+        # Prefer saureus_cgmlst when present, otherwise first cached cgMLST
+        await page.evaluate(
+            """
+            (() => {
+              const sel = document.getElementById('scheme-select');
+              const prefer = ['saureus_cgmlst', 'lmonocytogenes_cgmlst', 'saureus_mlst'];
+              for (const p of prefer) {
+                const opt = [...sel.options].find(o => o.value === p);
+                if (opt) { sel.value = p; sel.dispatchEvent(new Event('change')); break; }
+              }
+              const folder = document.getElementById('folder-input');
+              folder.value = '/home/iowa/Desktop/MORI/test/';
+              document.getElementById('cluster-threshold').value = 5;
+            })()
+            """
         )
         await page.wait_for_timeout(400)
         await page.screenshot(path=str(out / "01_welcome.png"), full_page=False)
@@ -123,8 +139,8 @@ async def main() -> int:
                 """,
                 {"results": injected["results"], "mst": injected["mst"]},
             )
-            # Let Cytoscape settle
-            await page.wait_for_timeout(2500)
+            # Let Cytoscape settle — fcose's "proof" quality needs more time
+            await page.wait_for_timeout(5000)
 
             # Hide results panel for a clean MST shot
             await page.evaluate(
@@ -134,15 +150,17 @@ async def main() -> int:
             await page.screenshot(path=str(out / "03_mst.png"), full_page=False)
             print("  ✓ 03_mst.png")
 
-            # Cluster halo: show how the cluster_threshold groups close isolates
+            # Cluster halos at a threshold that produces multiple visible
+            # nebulas on this dataset (S. aureus cgMLST median edge ~ 43,
+            # threshold ~ 32 surfaces ~10 close-related groups).
             await page.evaluate(
                 """
-                const t = state.schemeClusterThreshold || 5;
+                const t = 32;
                 document.getElementById('cluster-threshold').value = t;
                 document.getElementById('cluster-threshold').dispatchEvent(new Event('input'));
                 """
             )
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(2200)
             await page.screenshot(path=str(out / "04_clusters.png"), full_page=False)
             print("  ✓ 04_clusters.png")
 
