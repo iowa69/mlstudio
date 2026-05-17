@@ -131,10 +131,11 @@ async def main() -> int:
         await page.evaluate("document.getElementById('discover-modal').classList.add('hidden')")
 
         if injected:
+            real_id = args.job_id or 'replayed'
             await page.evaluate(
                 """
-                ({results, mst}) => {
-                    state.jobId = 'replayed';
+                ({results, mst, jobId}) => {
+                    state.jobId = jobId;
                     state.results = results;
                     state.mst = mst;
                     // Honor scheme cluster threshold from select
@@ -156,7 +157,7 @@ async def main() -> int:
                     document.getElementById('status-text').textContent = `Analyzed ${results.length} samples`;
                 }
                 """,
-                {"results": injected["results"], "mst": injected["mst"]},
+                {"results": injected["results"], "mst": injected["mst"], "jobId": real_id},
             )
             # Let Cytoscape settle — fcose's "proof" quality needs more time
             await page.wait_for_timeout(5000)
