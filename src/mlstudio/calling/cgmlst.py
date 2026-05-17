@@ -70,13 +70,23 @@ def build_concat_db(scheme: Scheme, db_root: Path | None = None) -> Path:
 
 
 def _blast_concat(assembly: Path, db: Path, threads: int) -> list[dict]:
+    """BLAST the genome against the concatenated allele DB.
+
+    For schemes where some loci have thousands of allele variants, BLAST's
+    `-max_target_seqs` can be saturated by hits from a single high-diversity
+    locus, hiding all the others. We work around that with a per-locus
+    streaming aggregator: keep only the best hit observed so far per locus,
+    so we never need to buffer 100k+ rows.
+    """
     fmt = "6 qseqid sseqid pident length qstart qend sstart send evalue bitscore slen"
     cmd = ["blastn", "-query", str(assembly), "-db", str(db),
            "-outfmt", fmt, "-num_threads", str(threads),
-           "-max_target_seqs", "5000", "-evalue", "1e-30",
-           "-perc_identity", "85"]
+           # Effectively no cap: 2.7M alleles in the DB, we want every locus
+           # represented at least once.
+           "-max_target_seqs", "5000000",
+           "-evalue", "1e-30", "-perc_identity", "85"]
     proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-    hits = []
+    best: dict[str, dict] = {}
     for line in proc.stdout.splitlines():
         c = line.split("\t")
         if len(c) < 11:
@@ -85,12 +95,15 @@ def _blast_concat(assembly: Path, db: Path, threads: int) -> list[dict]:
         if LOCUS_SEP not in sid:
             continue
         locus, allele = sid.split(LOCUS_SEP, 1)
-        hits.append({
-            "locus": locus, "allele": allele,
-            "pident": float(c[2]), "length": int(c[3]),
-            "bitscore": float(c[9]), "slen": int(c[10]),
-        })
-    return hits
+        bitscore = float(c[9])
+        prev = best.get(locus)
+        if prev is None or bitscore > prev["bitscore"]:
+            best[locus] = {
+                "locus": locus, "allele": allele,
+                "pident": float(c[2]), "length": int(c[3]),
+                "bitscore": bitscore, "slen": int(c[10]),
+            }
+    return list(best.values())
 
 
 def call_cgmlst(
@@ -108,6 +121,7 @@ def call_cgmlst(
     sample = assembly.stem.replace(".fna", "").replace(".fasta", "").replace(".fa", "")
     result = MLSTResult(sample=sample, scheme=scheme.name, st=None)
 
+    # _blast_concat already returns the best hit per locus.
     all_hits = _blast_concat(assembly, db, threads=threads)
     by_locus: dict[str, list[dict]] = defaultdict(list)
     for h in all_hits:
