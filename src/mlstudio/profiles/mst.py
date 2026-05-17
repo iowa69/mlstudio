@@ -30,6 +30,7 @@ def mst_to_cytoscape(
     metadata: dict[str, dict[str, Any]] | None = None,
     st_by_sample: dict[str, str | None] | None = None,
     cluster_threshold: int = 0,
+    members_by_rep: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Serialize an MST to Cytoscape.js JSON.
 
@@ -54,14 +55,29 @@ def mst_to_cytoscape(
         for n in comp:
             cluster_id[n] = i + 1
 
+    members_by_rep = members_by_rep or {n: [n] for n in mst.nodes}
     for node in mst.nodes:
-        data: dict[str, Any] = {"id": node, "label": node}
+        members = members_by_rep.get(node, [node])
+        data: dict[str, Any] = {
+            "id": node,
+            "label": node if len(members) == 1 else f"{node} +{len(members)-1}",
+            "members": members,
+            "size": len(members),
+        }
         if node in st_by_sample and st_by_sample[node]:
             data["st"] = st_by_sample[node]
         data["cluster_id"] = f"C{cluster_id.get(node, 0)}"
         if node in metadata:
             for k, v in metadata[node].items():
                 data[k] = v
+        # Composition table per metadata field (used for pie-chart rendering)
+        if len(members) > 1 and metadata:
+            comp: dict[str, dict[str, int]] = {}
+            for m in members:
+                for k, v in (metadata.get(m) or {}).items():
+                    comp.setdefault(k, {})
+                    comp[k][str(v)] = comp[k].get(str(v), 0) + 1
+            data["composition"] = comp
         elements.append({"data": data})
 
     for u, v, attrs in mst.edges(data=True):

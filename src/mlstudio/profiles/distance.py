@@ -55,6 +55,14 @@ def hamming_matrix(
             d = 0
             shared = 0
             for a, b in zip(pi, pj, strict=True):
+                if policy == "missing_as_category":
+                    # Treat None as its own allele value (Ridom's "missing as
+                    # own category"). Two missing values are equal; missing
+                    # vs called counts as a difference.
+                    if a != b:
+                        d += 1
+                    shared += 1
+                    continue
                 if a is None or b is None:
                     if policy == "count_missing":
                         d += 1

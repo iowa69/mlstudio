@@ -11,23 +11,23 @@ Point it at a folder of assembled bacterial genomes, pick a scheme, and explore 
 ## Screenshots
 
 ### 1. Welcome
-![Welcome](docs/screens/01_welcome_v3.png)
+![Welcome](docs/screens/01_welcome_v4.png)
 The starting view. The sidebar walks you through five steps: pick a folder, pick a scheme, set options, run, and adjust the display.
 
 ### 2. Built-in folder browser
-![Folder browser](docs/screens/02_browse_v3.png)
+![Folder browser](docs/screens/02_browse_v4.png)
 Click **Browse…** to navigate your filesystem from inside the browser — no need to type long paths. It tells you how many FASTA files are in each folder before you commit.
 
 ### 3. The minimum spanning tree
-![MST](docs/screens/03_mst_v3.png)
+![MST](docs/screens/03_mst_v4.png)
 A 67-isolate *Staphylococcus aureus* cgMLST tree (1716 loci). MSTs are centroid-free by definition — MLSTudio uses an `fcose` force-directed layout where **edge length is proportional to allele distance**, so visually close isolates really are genetically close. Nodes are colored by cluster, sample labels are always visible, and a default cluster halo highlights the closest pair.
 
 ### 4. Named cluster hulls
-![Cluster halos](docs/screens/04_clusters_v3.png)
-Slide the **cluster halo distance** up and outbreak-style groups appear as soft pastel hulls — labeled **Cluster 1, Cluster 2, …** — drawn on a canvas overlay so they pan and zoom with the tree. At the *S. aureus* cgMLST suggested 5-allele threshold you'll see clonal pairs only; at 24–32 you see the broader CC structure.
+![Cluster halos](docs/screens/04_clusters_v4.png)
+Slide the **cluster halo distance** up and outbreak-style groups appear as soft pastel hulls — labeled **Cluster 1, Cluster 2, …** — drawn on a canvas overlay so they pan and zoom with the tree. At the *S. aureus* cgMLST suggested 5-allele threshold you'll see clonal pairs only; at 24–32 you see the broader CC structure. Identical genotypes collapse into a single pie-chart node sized by member count.
 
 ### 5. Results table
-![Results table](docs/screens/05_table_v3.png)
+![Results table](docs/screens/05_table_v4.png)
 Per-isolate Sequence Types, per-locus allele calls, EXC/INF/LNF flags, and free-text notes. Scrollable, sortable, and exported alongside the tree.
 
 ---
@@ -88,9 +88,10 @@ Adding more schemes is a one-line edit to `src/mlstudio/schemes/bigsdb.py`'s `RE
 
 | Action | How |
 |--------|-----|
-| Drag a node | Click and hold |
+| Drag a node | Click and hold — manually-placed nodes auto-lock (border turns amber) |
 | Pan the canvas | Right-click drag |
 | Zoom | Scroll wheel |
+| Re-run the force layout | **Relax layout** button |
 | Fit everything to screen | **Fit to screen** button |
 | Hide edges above a distance | **Edge label threshold** slider |
 | Group close isolates into a named hull | **Cluster halo distance** slider |
@@ -99,13 +100,18 @@ Adding more schemes is a one-line edit to `src/mlstudio/schemes/bigsdb.py`'s `RE
 | Toggle sample labels | **Show sample labels** checkbox |
 | Export | **Export PNG** (high-DPI, white background) |
 
+### Node pies for identical genotypes
+
+When two or more samples share an *identical* allele profile they collapse into one node. With a metadata CSV uploaded, that node becomes a pie chart whose slices represent how the members are distributed across the selected color field — matching the convention used by professional MLST tools.
+
 ## Missing-data policy
 
 When you have partial assemblies, some loci are LNF (locus not found). Three policies for how that affects pairwise distance — switch live from the sidebar; the MST is recomputed on the server in seconds:
 
 | Policy | What it does | When to use |
 |--------|--------------|-------------|
-| **Pairwise complete** (default) | Only loci present in both isolates contribute. | Standard for cgMLST in SeqSphere-style tools. |
+| **Pairwise complete** (default) | Only loci present in both isolates contribute. | Standard for cgMLST. |
+| **Missing as own category** | Missing values form their own allele "value" — two missing loci are equal, missing vs called is a difference. | Recommended for smaller schemes (7-gene MLST, MLVA). |
 | **Count missing as differences** | Every missing locus counts as one allele difference. | Conservative — pushes apart isolates with poor calling. |
 | **Pairwise complete, scaled** | Pairwise-complete distance scaled to the full locus count: d × n_loci / n_shared. | Keeps the magnitude comparable across pairs with different overlap. |
 

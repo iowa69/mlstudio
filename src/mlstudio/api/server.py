@@ -182,12 +182,15 @@ async def _run_job(job: Job) -> None:
         job.scheme_loci = list(scheme.loci)
         job.scheme_cluster_threshold = scheme.cluster_threshold
         if len(profiles) >= 2:
-            dm = hamming_matrix(profiles, policy="pairwise_complete")
+            # Collapse identical genotypes into one representative node.
+            merged, members_by_rep = _merge_identical(profiles)
+            dm = hamming_matrix(merged, policy="pairwise_complete")
             mst = build_mst(dm)
             st_by_sample = {r["sample"]: r["st"] for r in job.results}
             job.mst = mst_to_cytoscape(
                 mst, job.metadata or None, st_by_sample,
                 cluster_threshold=scheme.cluster_threshold,
+                members_by_rep=members_by_rep,
             )
         else:
             sname = next(iter(profiles.keys()))
@@ -309,19 +312,21 @@ def create_app() -> FastAPI:
     @app.post("/api/jobs/{job_id}/recompute")
     async def job_recompute(job_id: str, policy: str = "pairwise_complete") -> dict[str, Any]:
         """Recompute the distance matrix + MST with a different missing-data policy."""
-        if policy not in ("pairwise_complete", "count_missing", "scaled"):
+        if policy not in ("pairwise_complete", "count_missing", "scaled", "missing_as_category"):
             raise HTTPException(400, f"Bad policy: {policy}")
         job = JOBS.get(job_id)
         if not job:
             raise HTTPException(404, "Unknown job")
         if not job.profiles or len(job.profiles) < 2:
             raise HTTPException(400, "Not enough samples for MST recompute")
-        dm = hamming_matrix(job.profiles, policy=policy)
+        merged, members_by_rep = _merge_identical(job.profiles)
+        dm = hamming_matrix(merged, policy=policy)
         mst = build_mst(dm)
         st_by_sample = {r["sample"]: r["st"] for r in job.results}
         job.mst = mst_to_cytoscape(
             mst, job.metadata or None, st_by_sample,
             cluster_threshold=job.scheme_cluster_threshold,
+            members_by_rep=members_by_rep,
         )
         job.distance_policy = policy
         return {"ok": True, "policy": policy, "mst": job.mst}
@@ -405,6 +410,27 @@ def create_app() -> FastAPI:
             return FileResponse(frontend_dir / "index.html")
 
     return app
+
+
+def _merge_identical(
+    profiles: dict[str, list[str | None]],
+) -> tuple[dict[str, list[str | None]], dict[str, list[str]]]:
+    """Group samples with byte-identical allele profiles.
+
+    Returns (merged_profiles_by_rep, members_by_rep). Representative = first
+    sample (alphabetical) in each group.
+    """
+    groups: dict[tuple, list[str]] = {}
+    for sample in sorted(profiles):
+        prof = tuple(profiles[sample])
+        groups.setdefault(prof, []).append(sample)
+    merged: dict[str, list[str | None]] = {}
+    members_by_rep: dict[str, list[str]] = {}
+    for prof, samples in groups.items():
+        rep = samples[0]
+        merged[rep] = list(prof)
+        members_by_rep[rep] = samples
+    return merged, members_by_rep
 
 
 def _metadata_fields(meta: dict[str, dict[str, Any]]) -> list[str]:

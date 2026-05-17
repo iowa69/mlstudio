@@ -80,6 +80,7 @@
         <span>Missing-data policy</span>
         <select id="distance-policy">
           <option value="pairwise_complete" selected>Pairwise complete (ignore missing)</option>
+          <option value="missing_as_category">Missing as own category</option>
           <option value="count_missing">Count missing as differences</option>
           <option value="scaled">Pairwise complete, scaled to full locus count</option>
         </select>
@@ -104,8 +105,9 @@
         <div class="row"><span class="muted small">Hide edges above</span><span id="threshold-val">100</span></div>
       </label>
       <label class="check"><input type="checkbox" id="show-labels" checked /> Show sample labels</label>
-      <button id="export-png" class="ghost">Export PNG</button>
+      <button id="relax-btn" class="ghost">Relax layout</button>
       <button id="fit-btn" class="ghost">Fit to screen</button>
+      <button id="export-png" class="ghost">Export PNG</button>
     </section>
 
     <section class="panel">

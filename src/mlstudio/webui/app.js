@@ -541,9 +541,11 @@ function renderMst() {
           'text-halign': 'center',
           'text-margin-y': 6,
           'border-width': nNodes > 300 ? 1 : 2,
-          'border-color': '#ffffff',
-          'border-opacity': 0.95,
-          'width': scale.nodeSize, 'height': scale.nodeSize,
+          'border-color': '#475569',
+          'border-opacity': 0.55,
+          // Node radius grows with sqrt(member_count) so dense clones don't dominate
+          'width': (ele) => scale.nodeSize * Math.sqrt(ele.data('size') || 1),
+          'height': (ele) => scale.nodeSize * Math.sqrt(ele.data('size') || 1),
           'text-outline-width': 3,
           'text-outline-color': '#ffffff',
         }
@@ -590,6 +592,8 @@ function renderMst() {
 
   ensureHullCanvas();
   applyClusters();
+  applyPieStyles();
+  attachLockOnDrag();
   renderLegend(initialField, state.currentPalette);
 }
 
@@ -784,7 +788,49 @@ function applyColoring() {
     n.data('_color', palette[v] || '#94a3b8');
   });
   applyClusters();
+  applyPieStyles();
   renderLegend(field, palette);
+}
+
+// Pie-chart rendering: when a merged node has >1 members, color by the
+// composition of the chosen field within those members. Up to 16 slices
+// (Cytoscape's hard cap).
+function applyPieStyles() {
+  if (!state.cy) return;
+  const field = $('color-field').value;
+  state.cy.nodes().forEach(n => {
+    const members = n.data('members') || [n.id()];
+    if (members.length <= 1) {
+      // Clear any prior pie slices
+      const reset = {};
+      for (let i = 1; i <= 16; i++) reset[`pie-${i}-background-size`] = 0;
+      n.style(reset);
+      return;
+    }
+    // composition keyed by metadata field; for st/cluster_id all members agree
+    let counts;
+    const comp = n.data('composition');
+    if (comp && comp[field]) {
+      counts = comp[field];
+    } else {
+      // No metadata composition available — single colored slice
+      counts = { [n.data(field)]: members.length };
+    }
+    const total = Object.values(counts).reduce((s, v) => s + v, 0);
+    const slices = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 16);
+    const styles = { 'pie-size': '100%' };
+    slices.forEach(([val, count], i) => {
+      styles[`pie-${i + 1}-background-color`] = state.currentPalette[val] || softColor(i);
+      styles[`pie-${i + 1}-background-size`] = (count / total) * 100;
+    });
+    // Zero out unused slots
+    for (let i = slices.length + 1; i <= 16; i++) {
+      styles[`pie-${i}-background-size`] = 0;
+    }
+    n.style(styles);
+  });
 }
 
 function renderLegend(field, palette) {
@@ -827,6 +873,24 @@ $('show-labels').addEventListener('change', (e) => {
 });
 
 $('fit-btn').addEventListener('click', () => state.cy && state.cy.fit(null, 50));
+
+$('relax-btn').addEventListener('click', () => {
+  if (!state.cy) return;
+  const nNodes = state.cy.nodes(':childless').length;
+  const scale = autoScale(nNodes);
+  const layout = mstLayout(nNodes, scale, state.mst.elements);
+  state.cy.layout({ ...layout, randomize: true }).run();
+  setTimeout(redrawHulls, 700);
+});
+
+// Auto-lock dragged nodes (Ridom convention: manual drag = pinned)
+function attachLockOnDrag() {
+  if (!state.cy) return;
+  state.cy.on('drag', 'node', (evt) => {
+    evt.target.data('_locked', true);
+    evt.target.style({ 'border-color': '#f59e0b', 'border-width': 2 });
+  });
+}
 
 // ---- Metadata --------------------------------------------------------------
 
