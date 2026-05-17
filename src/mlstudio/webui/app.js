@@ -188,8 +188,9 @@ function renderDiscover() {
       const btn = e.target;
       btn.textContent = '…'; btn.disabled = true;
       try {
-        await api('/schemes/discover/pull', {
+        const r = await fetch('/api/schemes/discover/pull', {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             host: btn.dataset.host, database: btn.dataset.db,
             scheme_id: parseInt(btn.dataset.sid),
@@ -197,10 +198,25 @@ function renderDiscover() {
             kind: btn.dataset.kind,
           }),
         });
+        if (!r.ok) {
+          let msg = await r.text();
+          try { msg = JSON.parse(msg).detail || msg; } catch {}
+          if (r.status === 403) {
+            btn.textContent = '🔒 auth';
+            btn.disabled = true;
+            btn.title = msg;
+            alert(msg);
+          } else {
+            btn.textContent = 'fail';
+            btn.disabled = false;
+            alert(msg);
+          }
+          return;
+        }
         btn.textContent = '✓'; btn.style.background = '#10b981';
         loadCatalog();
       } catch (err) {
-        btn.textContent = 'fail'; alert(err.message);
+        btn.textContent = 'fail'; btn.disabled = false; alert(err.message);
       }
     });
   });

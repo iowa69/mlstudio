@@ -107,6 +107,11 @@ def cache_root() -> Path:
     return Path(user_data_dir("mlstudio")) / "schemes"
 
 
+class AuthRequiredError(RuntimeError):
+    """Raised when the remote API returns no alleles anonymously — typically
+    because the curating institution gates cgMLST behind authentication."""
+
+
 async def _pull_locus(client: httpx.AsyncClient, url: str, target: Path,
                       sem: asyncio.Semaphore, retries: int = 6) -> str:
     async with sem:
@@ -118,10 +123,18 @@ async def _pull_locus(client: httpx.AsyncClient, url: str, target: Path,
                     ra = float(r.headers.get("retry-after", 0)) or (2 ** attempt)
                     await asyncio.sleep(min(60.0, max(2.0, ra)))
                     continue
+                if r.status_code == 404:
+                    # Distinguish "scheme has no public alleles" (auth-gated)
+                    # from "transient 404 / retry". A 404 won't be fixed by retries.
+                    body = r.text or ""
+                    if "No alleles" in body or '"records":0' in body:
+                        raise AuthRequiredError(body[:300])
+                    raise httpx.HTTPStatusError(
+                        f"404 for {url}", request=r.request, response=r)
                 r.raise_for_status()
                 target.write_text(r.text)
                 return hashlib.sha256(r.text.encode()).hexdigest()
-            except httpx.HTTPError:
+            except (AuthRequiredError, httpx.HTTPError):
                 if attempt == retries - 1:
                     raise
                 await asyncio.sleep(2.0 * (attempt + 1))
@@ -158,6 +171,28 @@ async def _pull_scheme_async(ref: SchemeRef, root: Path, concurrency: int = 20) 
             (root / "profiles.tsv").write_text("ST\n")
 
         sem = asyncio.Semaphore(concurrency)
+
+        # Probe the first locus synchronously. If THAT fails with the
+        # auth-gated pattern, abort early instead of pelting the server with
+        # 2700+ doomed requests.
+        if loci:
+            probe_url = f"{ref.host}/api/db/{ref.database}/loci/{loci[0]}/alleles_fasta"
+            probe_target = loci_dir / f"{loci[0]}.fasta"
+            if not (probe_target.exists() and probe_target.stat().st_size > 0):
+                try:
+                    await _pull_locus(client, probe_url, probe_target, sem, retries=2)
+                except AuthRequiredError:
+                    raise AuthRequiredError(
+                        f"{ref.host} returned no public alleles for "
+                        f"{ref.database!r} scheme {ref.scheme_id}. This scheme "
+                        "is gated behind authentication (typical for curated "
+                        "cgMLST nomenclatures). Either register at the host's "
+                        "BIGSdb portal, or build an ad-hoc cgMLST scheme from "
+                        "a reference genome:\n"
+                        "  mlstudio schemes build-adhoc --reference REF.fasta "
+                        "--key mygenus_v1 --organism 'My Genus species'"
+                    )
+
         tasks = []
         for i, locus in enumerate(loci):
             url = f"{ref.host}/api/db/{ref.database}/loci/{locus}/alleles_fasta"

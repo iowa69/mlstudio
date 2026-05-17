@@ -31,8 +31,12 @@ from mlstudio.profiles.distance import hamming_matrix
 from mlstudio.profiles.mst import build_mst, mst_to_cytoscape
 from mlstudio.schemes import Scheme
 from mlstudio.schemes.bigsdb import (
-    REGISTRY, BigsdbClient, SchemeRef, _classify_scheme,
+    REGISTRY, AuthRequiredError, BigsdbClient, SchemeRef, _classify_scheme,
     cache_root, discover_remote_schemes, list_local, pull_scheme,
+)
+from mlstudio.schemes.cgmlst_org import (
+    load_registry as load_cgmlst_org_registry,
+    pull_cgmlst_org_scheme,
 )
 
 log = logging.getLogger(__name__)
@@ -44,6 +48,10 @@ JOBS: dict[str, "Job"] = {}
 def projects_root() -> Path:
     """Where saved projects live."""
     return cache_root().parent / "projects"
+
+
+def _slug_to_key_for_response(slug: str) -> str:
+    return f"{slug.lower()}_cgmlst_orgio"
 
 
 class Job:
@@ -121,7 +129,13 @@ async def _run_job(job: Job) -> None:
         job.notify()
 
         # 1. Make sure scheme is present
-        scheme = pull_scheme(job.scheme_key)
+        local_dir = cache_root() / job.scheme_key
+        if job.scheme_key in REGISTRY:
+            scheme = pull_scheme(job.scheme_key)
+        elif (local_dir / "manifest.json").exists():
+            scheme = Scheme.from_dir(local_dir)
+        else:
+            raise RuntimeError(f"Scheme {job.scheme_key} not cached. Pull it first.")
 
         # 2. Scan folder
         samples = scan(job.folder)
@@ -291,13 +305,22 @@ def create_app() -> FastAPI:
 
     @app.get("/api/schemes/discover")
     async def schemes_discover(refresh: bool = False) -> dict[str, Any]:
-        """Live-discover every scheme on PubMLST.org and BIGSdb-Pasteur.
-
-        Cached for the lifetime of the process; pass refresh=true to bust.
-        """
+        """Live-discover every scheme on PubMLST.org and BIGSdb-Pasteur,
+        plus our static cgMLST.org registry (40 organisms, anonymous download)."""
         if refresh or "schemes" not in _discovery_cache:
             loop = asyncio.get_running_loop()
             schemes = await loop.run_in_executor(None, discover_remote_schemes)
+            # Inject cgMLST.org schemes from the bundled registry
+            for s in load_cgmlst_org_registry():
+                schemes.append({
+                    "organism": s["organism"],
+                    "host": "https://www.cgmlst.org",
+                    "database": s["slug"],
+                    "scheme_id": 0,
+                    "description": f"cgMLST.org · {s['locus_count']} loci · {s['ct_count']:,} CTs",
+                    "kind": "cgmlst",
+                    "source": "cgmlst_org",
+                })
             _discovery_cache["schemes"] = schemes
         return {"schemes": _discovery_cache["schemes"]}
 
@@ -306,6 +329,20 @@ def create_app() -> FastAPI:
         """Pull a scheme not already in the static REGISTRY by giving us its
         host / database / scheme_id / organism. Stored in the local cache and
         auto-appears in the catalog."""
+        source = payload.get("source")
+        # cgMLST.org schemes use a different code path (bulk ZIP download).
+        if source == "cgmlst_org":
+            slug = payload["database"]
+            organism = payload.get("organism") or slug
+            try:
+                scheme = await asyncio.get_running_loop().run_in_executor(
+                    None, pull_cgmlst_org_scheme, slug, organism, 5, None, False,
+                )
+            except Exception as e:
+                raise HTTPException(500, f"cgMLST.org pull failed: {e}")
+            return {"ok": True, "key": _slug_to_key_for_response(slug),
+                    "name": scheme.name, "loci": len(scheme.loci)}
+
         host = payload["host"].rstrip("/")
         # Strip /api if present (BIGSdb-Pasteur returns /api/db URLs, our
         # bigsdb client adds /api back).
@@ -334,6 +371,10 @@ def create_app() -> FastAPI:
             scheme = await asyncio.get_running_loop().run_in_executor(
                 None, pull_scheme, key, False, None, 8,
             )
+        except AuthRequiredError as e:
+            REGISTRY.pop(key, None)
+            # 403 makes the failure mode unambiguous in the client + logs.
+            raise HTTPException(403, str(e))
         except Exception as e:
             # Pop the bogus registry entry so the user can retry
             REGISTRY.pop(key, None)
@@ -398,8 +439,12 @@ def create_app() -> FastAPI:
         folder = Path(req.folder).expanduser()
         if not folder.is_dir():
             raise HTTPException(404, f"Not a directory: {req.folder}")
+        # Accept any scheme in REGISTRY or any locally-cached one (e.g.
+        # cgMLST.org pulls + ad-hoc schemes).
         if req.scheme not in REGISTRY:
-            raise HTTPException(400, f"Unknown scheme: {req.scheme}")
+            local_dir = cache_root() / req.scheme
+            if not (local_dir / "manifest.json").exists():
+                raise HTTPException(400, f"Unknown scheme: {req.scheme}")
 
         job_id = uuid.uuid4().hex[:8]
         job = Job(job_id, folder, req.scheme, req.threads, req.use_fastp)

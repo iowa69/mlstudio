@@ -1,0 +1,245 @@
+{
+  "schemes": [
+    {
+      "slug": "Abaumannii",
+      "organism": "Acinetobacter baumannii",
+      "locus_count": 2390,
+      "ct_count": 8622
+    },
+    {
+      "slug": "Banthracis",
+      "organism": "Bacillus anthracis",
+      "locus_count": 3803,
+      "ct_count": 225
+    },
+    {
+      "slug": "Bpertussis",
+      "organism": "Bordetella pertussis",
+      "locus_count": 2983,
+      "ct_count": 447
+    },
+    {
+      "slug": "Bmelitensis",
+      "organism": "Brucella melitensis",
+      "locus_count": 2704,
+      "ct_count": 172
+    },
+    {
+      "slug": "Brucella",
+      "organism": "Brucella spp.",
+      "locus_count": 1764,
+      "ct_count": 661
+    },
+    {
+      "slug": "Bmallei_fli",
+      "organism": "Burkholderia mallei (FLI)",
+      "locus_count": 2838,
+      "ct_count": 30
+    },
+    {
+      "slug": "Bmallei_rki",
+      "organism": "Burkholderia mallei (RKI)",
+      "locus_count": 3328,
+      "ct_count": 34
+    },
+    {
+      "slug": "Bpseudomallei",
+      "organism": "Burkholderia pseudomallei",
+      "locus_count": 4221,
+      "ct_count": 531
+    },
+    {
+      "slug": "Cjejuni_complex",
+      "organism": "Campylobacter jejuni/coli",
+      "locus_count": 637,
+      "ct_count": 10498
+    },
+    {
+      "slug": "Cfreundii",
+      "organism": "Citrobacter freundii",
+      "locus_count": 3250,
+      "ct_count": 607
+    },
+    {
+      "slug": "Cfreundii_complex",
+      "organism": "Citrobacter freundii/portucalensis/braakii/europaeus",
+      "locus_count": 2307,
+      "ct_count": 234
+    },
+    {
+      "slug": "Cdifficile",
+      "organism": "Clostridioides difficile",
+      "locus_count": 2147,
+      "ct_count": 9562
+    },
+    {
+      "slug": "Cperfringens",
+      "organism": "Clostridium perfringens",
+      "locus_count": 1431,
+      "ct_count": 194
+    },
+    {
+      "slug": "Cdiphtheriae",
+      "organism": "Corynebacterium diphtheriae",
+      "locus_count": 1553,
+      "ct_count": 396
+    },
+    {
+      "slug": "Cpseudotuberculosis",
+      "organism": "Corynebacterium pseudotuberculosis",
+      "locus_count": 1577,
+      "ct_count": 99
+    },
+    {
+      "slug": "Csakazakii_complex",
+      "organism": "Cronobacter sakazakii/malonaticus",
+      "locus_count": 2831,
+      "ct_count": 218
+    },
+    {
+      "slug": "Ehormaechei",
+      "organism": "Enterobacter hormaechei",
+      "locus_count": 2178,
+      "ct_count": 534
+    },
+    {
+      "slug": "Efaecalis",
+      "organism": "Enterococcus faecalis",
+      "locus_count": 1972,
+      "ct_count": 4780
+    },
+    {
+      "slug": "Efaecium",
+      "organism": "Enterococcus faecium",
+      "locus_count": 1423,
+      "ct_count": 10337
+    },
+    {
+      "slug": "Ecoli",
+      "organism": "Escherichia coli",
+      "locus_count": 2513,
+      "ct_count": 73772
+    },
+    {
+      "slug": "Ftularensis",
+      "organism": "Francisella tularensis",
+      "locus_count": 1147,
+      "ct_count": 266
+    },
+    {
+      "slug": "Koxytoca_complex",
+      "organism": "Klebsiella oxytoca/grimontii/michiganensis/pasteurii",
+      "locus_count": 2536,
+      "ct_count": 908
+    },
+    {
+      "slug": "Kpneumoniae_complex",
+      "organism": "Klebsiella pneumoniae/variicola/quasipneumoniae",
+      "locus_count": 2358,
+      "ct_count": 22027
+    },
+    {
+      "slug": "Lpneumophila",
+      "organism": "Legionella pneumophila",
+      "locus_count": 1521,
+      "ct_count": 1848
+    },
+    {
+      "slug": "Lmonocytogenes",
+      "organism": "Listeria monocytogenes",
+      "locus_count": 1701,
+      "ct_count": 24549
+    },
+    {
+      "slug": "Mmorganii",
+      "organism": "Morganella morganii",
+      "locus_count": 2462,
+      "ct_count": 32
+    },
+    {
+      "slug": "Mtuberculosis_complex",
+      "organism": "Mycobacterium tuberculosis/bovis/africanum/canettii",
+      "locus_count": 2891,
+      "ct_count": 43215
+    },
+    {
+      "slug": "Mabscessus",
+      "organism": "Mycobacteroides abscessus",
+      "locus_count": 2904,
+      "ct_count": 1078
+    },
+    {
+      "slug": "Mgallisepticum",
+      "organism": "Mycoplasma gallisepticum",
+      "locus_count": 425,
+      "ct_count": 72
+    },
+    {
+      "slug": "Plarvae",
+      "organism": "Paenibacillus larvae",
+      "locus_count": 2419,
+      "ct_count": 192
+    },
+    {
+      "slug": "Pmirabilis",
+      "organism": "Proteus mirabilis",
+      "locus_count": 2574,
+      "ct_count": 138
+    },
+    {
+      "slug": "Pstuartii",
+      "organism": "Providencia stuartii",
+      "locus_count": 3079,
+      "ct_count": 16
+    },
+    {
+      "slug": "Paeruginosa",
+      "organism": "Pseudomonas aeruginosa",
+      "locus_count": 3867,
+      "ct_count": 8674
+    },
+    {
+      "slug": "Senterica",
+      "organism": "Salmonella enterica",
+      "locus_count": 3002,
+      "ct_count": 32603
+    },
+    {
+      "slug": "Smarcescens",
+      "organism": "Serratia marcescens",
+      "locus_count": 2692,
+      "ct_count": 2105
+    },
+    {
+      "slug": "Sargenteus",
+      "organism": "Staphylococcus argenteus",
+      "locus_count": 2168,
+      "ct_count": 3
+    },
+    {
+      "slug": "Saureus",
+      "organism": "Staphylococcus aureus",
+      "locus_count": 1861,
+      "ct_count": 55676
+    },
+    {
+      "slug": "Scapitis",
+      "organism": "Staphylococcus capitis",
+      "locus_count": 1492,
+      "ct_count": 497
+    },
+    {
+      "slug": "Spyogenes",
+      "organism": "Streptococcus pyogenes",
+      "locus_count": 1095,
+      "ct_count": 1439
+    },
+    {
+      "slug": "Yenterocolitica",
+      "organism": "Yersinia enterocolitica",
+      "locus_count": 2582,
+      "ct_count": 1009
+    }
+  ],
+  "source": "https://www.cgmlst.org/ncs"
+}
