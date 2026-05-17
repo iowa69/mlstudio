@@ -1,15 +1,68 @@
 """Allele-profile distance computations.
 
-Hamming distance over allele profiles, ignoring missing calls per the user-configured
-policy (pairwise-complete by default). Vectorized over numpy arrays of int allele IDs.
+Hamming distance over allele profiles (string identifiers), ignoring missing
+calls per the user policy.
 
-Stub — M5.
+Input: a dict {sample_name: [allele_or_None_per_locus]}.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 
-def hamming_matrix(profiles: np.ndarray, ignore_missing: bool = True) -> np.ndarray:
-    raise NotImplementedError("M5 — distance matrix not yet implemented.")
+@dataclass(slots=True)
+class DistanceMatrix:
+    samples: list[str]
+    matrix: np.ndarray   # (n, n) int
+
+    @property
+    def n(self) -> int:
+        return len(self.samples)
+
+    def as_dict(self) -> dict[str, dict[str, int]]:
+        return {
+            self.samples[i]: {self.samples[j]: int(self.matrix[i, j]) for j in range(self.n)}
+            for i in range(self.n)
+        }
+
+
+def hamming_matrix(
+    profiles: dict[str, list[str | None]],
+    ignore_missing: bool = True,
+) -> DistanceMatrix:
+    """Pairwise Hamming distance over allele profiles.
+
+    If `ignore_missing` is True, loci where either profile is None are excluded
+    from that pair's denominator AND numerator (pairwise-complete).
+    """
+    samples = list(profiles.keys())
+    n = len(samples)
+    n_loci = len(next(iter(profiles.values()))) if samples else 0
+    mat = np.zeros((n, n), dtype=np.int32)
+
+    for i in range(n):
+        pi = profiles[samples[i]]
+        for j in range(i + 1, n):
+            pj = profiles[samples[j]]
+            d = 0
+            shared = 0
+            for a, b in zip(pi, pj, strict=True):
+                if a is None or b is None:
+                    if ignore_missing:
+                        continue
+                    d += 1
+                else:
+                    shared += 1
+                    if a != b:
+                        d += 1
+            if ignore_missing and shared == 0:
+                # No comparable loci — treat as maximally distant.
+                d = n_loci if n_loci > 0 else 1
+            mat[i, j] = d
+            mat[j, i] = d
+
+    _ = n_loci
+    return DistanceMatrix(samples=samples, matrix=mat)

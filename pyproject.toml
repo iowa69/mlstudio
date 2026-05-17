@@ -28,6 +28,7 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "websockets>=12",
+    "python-multipart>=0.0.9",
     "pydantic>=2.7",
     "numpy>=1.26",
     "pandas>=2.2",
@@ -58,6 +59,9 @@ Issues = "https://github.com/iowa69/mlstudio/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlstudio"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/mlstudio/webui" = "mlstudio/webui"
 
 [tool.ruff]
 line-length = 100

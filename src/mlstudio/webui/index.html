@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MLSTudio</title>
+<link rel="stylesheet" href="/static/style.css" />
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">M</span>
+    <div>
+      <h1>MLSTudio</h1>
+      <p class="tagline">MLST / cgMLST typing with an interactive minimum spanning tree</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span id="status-dot" class="dot idle"></span>
+    <span id="status-text">Idle</span>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <section class="panel">
+      <h2>1. Input folder</h2>
+      <label class="field">
+        <span>Folder path</span>
+        <input id="folder-input" type="text" placeholder="/path/to/genomes" />
+      </label>
+      <button id="scan-btn" class="primary">Scan folder</button>
+      <div id="scan-result" class="muted small"></div>
+    </section>
+
+    <section class="panel">
+      <h2>2. Scheme</h2>
+      <select id="scheme-select"></select>
+      <p class="muted small">First use of a scheme will download it (one-time).</p>
+    </section>
+
+    <section class="panel">
+      <h2>3. Options</h2>
+      <label class="check">
+        <input type="checkbox" id="use-fastp" checked />
+        Run fastp on FASTQ pairs (auto-detect parameters)
+      </label>
+      <label class="field">
+        <span>Threads (0 = auto)</span>
+        <input id="threads" type="number" min="0" value="0" />
+      </label>
+    </section>
+
+    <section class="panel">
+      <button id="run-btn" class="primary large" disabled>▶  Analyze</button>
+      <div id="job-progress" class="progress hidden">
+        <div class="bar"><div class="bar-fill"></div></div>
+        <div id="progress-text" class="muted small"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>4. Metadata</h2>
+      <input id="meta-file" type="file" accept=".csv,.tsv" />
+      <p class="muted small">First column = sample name. Other columns become available as color fields.</p>
+    </section>
+
+    <section class="panel">
+      <h2>5. Display</h2>
+      <label class="field">
+        <span>Color nodes by</span>
+        <select id="color-field"><option value="st">ST</option></select>
+      </label>
+      <label class="field">
+        <span>Distance threshold</span>
+        <input id="threshold" type="range" min="0" max="100" value="100" />
+        <div class="row"><span class="muted small">All edges</span><span id="threshold-val">100</span></div>
+      </label>
+      <button id="export-svg" class="ghost">Export SVG</button>
+      <button id="export-png" class="ghost">Export PNG</button>
+    </section>
+  </aside>
+
+  <section class="viewport">
+    <div id="cy"></div>
+    <div id="legend" class="legend hidden"></div>
+    <div id="empty-state" class="empty-state">
+      <h2>Welcome</h2>
+      <ol>
+        <li>Enter a folder containing <code>.fasta</code> assemblies (optionally with matching paired-end <code>_R1_/_R2_</code> FASTQs).</li>
+        <li>Pick a scheme.</li>
+        <li>Click <b>Analyze</b>.</li>
+        <li>Upload an optional metadata CSV and pick a field to color by.</li>
+      </ol>
+      <p class="muted">Tip: drag nodes to lay them out manually. Drag with right mouse button to pan. Scroll to zoom.</p>
+    </div>
+  </section>
+</main>
+
+<section id="results-panel" class="results-panel hidden">
+  <header>
+    <h2>Results</h2>
+    <button id="toggle-results" class="ghost">collapse ▾</button>
+  </header>
+  <div class="table-wrap">
+    <table id="results-table">
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

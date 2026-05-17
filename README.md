@@ -38,21 +38,32 @@ There is no integrated, polished, *local* Linux tool combining calling + interac
 
 ## Quickstart
 
-> Not functional yet — placeholders below for the v1 UX.
-
 ```bash
-# Install (planned via bioconda)
-conda install -c bioconda mlstudio
+# Clone and bootstrap (creates the `mlstudio` conda env with all bio + Python deps)
+git clone git@github.com:iowa69/mlstudio.git && cd mlstudio
+./setup.sh
+conda activate mlstudio
 
-# One-time setup: download schemes + dependencies
-mlstudio setup --species "Listeria monocytogenes"
+# One-time: download a scheme (PubMLST or BIGSdb-Pasteur)
+mlstudio schemes list --remote        # see available scheme keys
+mlstudio schemes pull lmonocytogenes_mlst
 
-# Run a typing job
-mlstudio call --scheme listeria_cgmlst --input assemblies/ --reads reads/ -o results/
+# Smoke-test the MLST caller on a single assembly
+mlstudio call mlst --scheme lmonocytogenes_mlst \
+    --input test_data/demo_folder/EGD-e.fasta
+# → ST 35 (matches the well-known Listeria EGD-e reference)
 
-# Launch the GUI
-mlstudio gui
+# Launch the WebUI: point it at a folder of .fasta (+ optional R1/R2 FASTQs)
+mlstudio gui /path/to/folder
 ```
+
+Working end-to-end as of M0.5: scheme auto-download · multi-sample BLAST · ST
+assignment · pairwise Hamming distance · Minimum Spanning Tree · interactive
+Cytoscape.js viewer with threshold slider · metadata CSV upload + recoloring ·
+fastp QC on paired-end reads with auto-detected parameters.
+
+cgMLST, Bowtie2 rescue, and AMRFinderPlus are scaffolded but not wired up yet —
+see [ROADMAP.md](ROADMAP.md) M3–M4.
 
 ## Architecture (planned)
 

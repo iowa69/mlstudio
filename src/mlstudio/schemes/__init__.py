@@ -1,14 +1,52 @@
-"""Scheme management: PubMLST, cgMLST.org, public Ridom schemes.
+"""Scheme management.
 
-Responsibilities:
-    - Discover available schemes from upstream registries.
-    - Download and version-pin scheme files into the local cache.
-    - Verify integrity (SHA-256 manifest).
-    - Expose a uniform Scheme object to the rest of the codebase.
-
-Layout on disk (planned):
-    ~/.mlstudio/schemes/<species>/<scheme>/v<version>/
-        loci/*.fasta
+Layout on disk:
+    ~/.mlstudio/schemes/<organism>/<scheme>/v<version>/
+        loci/<locus>.fasta
         profiles.tsv
-        manifest.json   # SHA-256 hashes + source URL + fetched_at
+        manifest.json
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+@dataclass(slots=True)
+class Scheme:
+    """A locally-cached MLST or cgMLST scheme."""
+
+    organism: str
+    name: str
+    root: Path
+    loci: list[str] = field(default_factory=list)
+    profile_table: Path | None = None
+    source: str = ""
+    last_updated: str = ""
+
+    @property
+    def loci_dir(self) -> Path:
+        return self.root / "loci"
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.root / "manifest.json"
+
+    def locus_fasta(self, locus: str) -> Path:
+        return self.loci_dir / f"{locus}.fasta"
+
+    @classmethod
+    def from_dir(cls, root: Path) -> "Scheme":
+        import json
+
+        manifest = json.loads((root / "manifest.json").read_text())
+        return cls(
+            organism=manifest["organism"],
+            name=manifest["name"],
+            root=root,
+            loci=manifest["loci"],
+            profile_table=root / "profiles.tsv",
+            source=manifest.get("source", ""),
+            last_updated=manifest.get("last_updated", ""),
+        )
