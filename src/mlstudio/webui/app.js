@@ -44,26 +44,47 @@ async function loadCatalog() {
   const cat = $('catalog-list');
   cat.innerHTML = '';
 
-  // Group by organism
+  // Group by organism — both the dropdown (optgroup) and the catalog list
   const byOrg = {};
   for (const s of data.registry) {
     (byOrg[s.organism] = byOrg[s.organism] || []).push(s);
   }
 
-  for (const [org, schemes] of Object.entries(byOrg).sort()) {
+  // Sort: cached organisms first, then alphabetical
+  const sortedOrgs = Object.entries(byOrg).sort((a, b) => {
+    const aCached = a[1].some(s => s.cached);
+    const bCached = b[1].some(s => s.cached);
+    if (aCached !== bCached) return aCached ? -1 : 1;
+    return a[0].localeCompare(b[0]);
+  });
+
+  for (const [org, schemes] of sortedOrgs) {
+    // optgroup per organism in the dropdown
+    const grp = document.createElement('optgroup');
+    grp.label = org;
+    // Preferred order inside an organism: MLST, cgMLST, accessory, other
+    const kindOrder = { mlst: 0, cgmlst: 1, accessory: 2, other: 3 };
+    schemes.sort((a, b) => (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9));
     for (const s of schemes) {
       const opt = document.createElement('option');
       opt.value = s.key;
-      opt.textContent = `${s.organism} · ${s.scheme}` + (s.cached ? ' ✓' : '');
+      opt.textContent = `${s.kind} · ${s.scheme}${s.cached ? ' ✓' : ''}`;
       opt.dataset.kind = s.kind;
       opt.dataset.cluster = s.cluster_threshold;
-      sel.appendChild(opt);
+      grp.appendChild(opt);
+    }
+    sel.appendChild(grp);
 
+    // Catalog rows — grouped header + one row per scheme
+    const header = document.createElement('div');
+    header.className = 'catalog-org';
+    header.textContent = org;
+    cat.appendChild(header);
+    for (const s of schemes) {
       const row = document.createElement('div');
       row.className = 'catalog-row';
       row.innerHTML = `
         <div>
-          <div class="name">${s.organism}</div>
           <div class="muted small">${s.scheme} <span class="kind ${s.kind}">${s.kind}</span></div>
         </div>
         ${s.cached ? '<span class="ok">✓</span>' : `<button class="mini" data-key="${s.key}">Pull</button>`}
@@ -262,7 +283,17 @@ $('scan-btn').addEventListener('click', async () => {
   try {
     const data = await api('/scan?folder=' + encodeURIComponent(folder));
     const withReads = data.samples.filter(s => s.has_reads).length;
-    $('scan-result').textContent = `${data.samples.length} sample(s) · ${withReads} with paired reads`;
+    // Probe cache to surface incremental status (rough heuristic — counts
+    // cache files in the standard output folder).
+    let cacheInfo = '';
+    try {
+      const fs = await api('/fs/list?path=' + encodeURIComponent(folder + '/.mlstudio/calls'));
+      // fs.entries are sub-folders; cache files are not listed (only dirs are).
+      // So we approximate using the .mlstudio folder existence.
+      cacheInfo = '  ·  cache exists — re-run will be incremental';
+    } catch {}
+    $('scan-result').textContent =
+      `${data.samples.length} sample(s) · ${withReads} with paired reads${cacheInfo}`;
     $('run-btn').disabled = data.samples.length === 0;
   } catch (e) {
     $('scan-result').textContent = 'Error: ' + e.message;
@@ -425,7 +456,11 @@ function renderComparisonTable() {
   }
   html.push('</tr></thead><tbody>');
   for (const r of rows) {
-    html.push('<tr>');
+    const cluster = (state.clusters || []).find(c => c.members.includes(r.sample));
+    const trAttrs = cluster
+      ? ` data-cluster="${cluster.id}" style="--cluster-color:${cluster.color}"`
+      : '';
+    html.push(`<tr${trAttrs}>`);
     for (const c of cols) {
       let v = c.getter(r);
       if (c.key === 'sample') {
@@ -569,16 +604,16 @@ function computeClusters(mst, threshold) {
 // Auto-tune visual parameters based on dataset size so the layout stays
 // legible from 5 to 5000 isolates.
 function autoScale(nNodes) {
-  if (nNodes <= 30) return { nodeSize: 50, fontSize: 12, edgeLabel: true,
-                              labels: true, ideal: 160, repulse: 30000, edgeMax: 5.5 };
-  if (nNodes <= 100) return { nodeSize: 38, fontSize: 11, edgeLabel: true,
-                              labels: true, ideal: 140, repulse: 22000, edgeMax: 4.5 };
-  if (nNodes <= 300) return { nodeSize: 24, fontSize: 10, edgeLabel: false,
-                              labels: false, ideal: 110, repulse: 14000, edgeMax: 3 };
-  if (nNodes <= 800) return { nodeSize: 16, fontSize: 9, edgeLabel: false,
-                              labels: false, ideal: 80, repulse: 8000, edgeMax: 2 };
-  return { nodeSize: 10, fontSize: 8, edgeLabel: false, labels: false,
-           ideal: 60, repulse: 5500, edgeMax: 1.5 };
+  if (nNodes <= 30) return { nodeSize: 50, fontSize: 14, edgeLabel: true,
+                              labels: true, ideal: 170, repulse: 32000, edgeMax: 5.5 };
+  if (nNodes <= 100) return { nodeSize: 42, fontSize: 13, edgeLabel: true,
+                              labels: true, ideal: 150, repulse: 24000, edgeMax: 4.5 };
+  if (nNodes <= 300) return { nodeSize: 28, fontSize: 12, edgeLabel: false,
+                              labels: true, ideal: 120, repulse: 16000, edgeMax: 3.5 };
+  if (nNodes <= 800) return { nodeSize: 18, fontSize: 11, edgeLabel: false,
+                              labels: false, ideal: 90, repulse: 9000, edgeMax: 2.2 };
+  return { nodeSize: 11, fontSize: 10, edgeLabel: false, labels: false,
+           ideal: 65, repulse: 6000, edgeMax: 1.5 };
 }
 
 // Kept as a fallback. Not the primary layout — MSTs are centroid-free by
@@ -761,17 +796,17 @@ function renderMst() {
         selector: 'node',
         style: {
           'background-color': 'data(_color)',
-          'background-opacity': 0.92,
+          'background-opacity': 1.0,
           'label': $('show-labels').checked ? 'data(label)' : '',
-          'color': '#334155',
+          'color': '#0f172a',
           'font-size': scale.fontSize + 'px',
-          'font-weight': 500,
+          'font-weight': 600,
           'text-valign': 'bottom',
           'text-halign': 'center',
-          'text-margin-y': 6,
-          'border-width': nNodes > 300 ? 1 : 2,
-          'border-color': '#475569',
-          'border-opacity': 0.55,
+          'text-margin-y': 7,
+          'border-width': nNodes > 300 ? 1 : 2.2,
+          'border-color': '#1e293b',
+          'border-opacity': 0.7,
           // Node radius grows with sqrt(member_count) so dense clones don't dominate
           'width': (ele) => scale.nodeSize * Math.sqrt(ele.data('size') || 1),
           'height': (ele) => scale.nodeSize * Math.sqrt(ele.data('size') || 1),
@@ -931,6 +966,61 @@ function redrawHulls() {
   const ctx = hullCtx;
   ctx.clearRect(0, 0, hullCanvas.width, hullCanvas.height);
   const clusters = state.clusters || [];
+  if (!clusters.length) return;
+
+  const zoom = state.cy.zoom();
+  const nodeR = 24 + 12 * Math.min(2, zoom);
+  const edgeW = 24 + 14 * Math.min(2, zoom);
+  const blurPx = 10 + 4 * Math.min(1.5, zoom);
+
+  // Draw the soft halo for each cluster on its own pass so colors don't pile
+  // up to black where clusters overlap. globalAlpha keeps fills airy even
+  // after the blur convolution intensifies the centre.
+  for (const c of clusters) {
+    const positions = {};
+    c.members.forEach(id => {
+      const n = state.cy.getElementById(id);
+      if (n && !n.empty()) {
+        const p = n.renderedPosition();
+        positions[id] = [p.x, p.y];
+      }
+    });
+    const pts = Object.values(positions);
+    if (pts.length < 1) continue;
+
+    ctx.save();
+    ctx.filter = `blur(${blurPx}px)`;
+    ctx.globalAlpha = 0.32;            // soft wash; the blur further softens it
+    ctx.fillStyle = c.color;
+    ctx.strokeStyle = c.color;
+    ctx.lineWidth = edgeW;
+    ctx.lineCap = 'round';
+
+    // Soft circle behind each member node
+    for (const [x, y] of pts) {
+      ctx.beginPath();
+      ctx.arc(x, y, nodeR, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    // Soft strokes along edges joining cluster members
+    if (pts.length >= 2) {
+      const memberSet = new Set(c.members);
+      state.cy.edges().forEach(edge => {
+        const s = edge.source().id(), t = edge.target().id();
+        if (memberSet.has(s) && memberSet.has(t) && positions[s] && positions[t]) {
+          ctx.beginPath();
+          ctx.moveTo(positions[s][0], positions[s][1]);
+          ctx.lineTo(positions[t][0], positions[t][1]);
+          ctx.stroke();
+        }
+      });
+    }
+    ctx.restore();
+  }
+
+  // Phase 2: sharp text labels (no blur)
+  ctx.font = 'bold 14px -apple-system, system-ui, sans-serif';
+  ctx.textAlign = 'center';
   for (const c of clusters) {
     const pts = c.members.map(id => {
       const n = state.cy.getElementById(id);
@@ -938,66 +1028,13 @@ function redrawHulls() {
       const p = n.renderedPosition();
       return [p.x, p.y];
     }).filter(Boolean);
-    if (pts.length < 2) continue;
-    const zoom = state.cy.zoom();
-    const pad = 28 + 18 * Math.min(2, zoom);
-    let outline;
-    if (pts.length === 2) {
-      // Two points: draw an ellipse rotated to align with them
-      const [a, b] = pts;
-      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-      const dx = b[0] - a[0], dy = b[1] - a[1];
-      const len = Math.hypot(dx, dy);
-      const angle = Math.atan2(dy, dx);
-      ctx.save();
-      ctx.translate(mx, my); ctx.rotate(angle);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, len / 2 + pad, pad, 0, 0, 2 * Math.PI);
-      ctx.fillStyle = c.color + '40';
-      ctx.fill();
-      ctx.strokeStyle = c.color;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.stroke();
-      ctx.restore();
-      // Label
-      ctx.fillStyle = c.color;
-      ctx.font = 'bold 13px -apple-system, system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(c.name, mx, my - pad - 6);
-      continue;
-    } else {
-      const hull = convexHull(pts);
-      outline = expandHull(hull, pad);
-    }
-    // Smooth rounded polygon
-    ctx.beginPath();
-    for (let i = 0; i < outline.length; i++) {
-      const p = outline[i];
-      const prev = outline[(i - 1 + outline.length) % outline.length];
-      const next = outline[(i + 1) % outline.length];
-      const mx1 = (prev[0] + p[0]) / 2, my1 = (prev[1] + p[1]) / 2;
-      const mx2 = (p[0] + next[0]) / 2, my2 = (p[1] + next[1]) / 2;
-      if (i === 0) ctx.moveTo(mx1, my1);
-      ctx.quadraticCurveTo(p[0], p[1], mx2, my2);
-    }
-    ctx.closePath();
-    ctx.fillStyle = c.color + '38';
-    ctx.fill();
-    ctx.strokeStyle = c.color;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 4]);
-    ctx.stroke();
-    // Label at hull centroid (slightly above)
-    const cx = outline.reduce((s, p) => s + p[0], 0) / outline.length;
-    const cy = outline.reduce((s, p) => s + p[1], 0) / outline.length;
-    const topY = Math.min(...outline.map(p => p[1]));
-    ctx.fillStyle = c.color;
-    ctx.font = 'bold 13px -apple-system, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(c.name, cx, topY - 8);
+    if (pts.length < 1) continue;
+    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+    const topY = Math.min(...pts.map(p => p[1]));
+    // Solid color label
+    ctx.fillStyle = '#1c2026';
+    ctx.fillText(c.name, cx, topY - nodeR - 12);
   }
-  ctx.setLineDash([]);
 }
 
 $('cluster-threshold').addEventListener('input', (e) => {

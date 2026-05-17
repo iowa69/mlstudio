@@ -49,7 +49,10 @@ html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: 
 .sidebar {
   background: var(--panel); border-right: 1px solid var(--border);
   overflow-y: auto; padding: 16px;
+  position: relative;
 }
+/* Floating, always-visible Analyze button */
+.sticky-run { position: sticky; bottom: 8px; z-index: 5; margin: 4px 0; background: var(--panel); border-radius: 10px; padding: 6px; box-shadow: 0 -2px 18px rgba(15,23,42,0.07); }
 .panel {
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow-sm);
@@ -99,6 +102,11 @@ button.mini:hover { background: var(--panel); }
 .comparison-table td { padding: 7px 10px; border-bottom: 1px solid var(--panel-2); white-space: nowrap; }
 .comparison-table tr:hover td { background: rgba(59,130,246,0.04); }
 .comparison-table .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.comparison-table tr[data-clcolor]:not(:hover) td:first-child { box-shadow: inset 4px 0 0 var(--cluster-color, transparent); }
+.comparison-table tr[data-cluster] td:first-child::before {
+  content: ''; display: inline-block; width: 3px; height: 16px; border-radius: 2px;
+  background: var(--cluster-color, transparent); margin-right: 8px; vertical-align: middle;
+}
 
 .stats-content { padding: 22px; max-width: 1100px; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
@@ -139,8 +147,9 @@ button.mini:hover { background: var(--panel); }
 
 /* Legacy bottom panel removed — superseded by the Comparison Table tab. */
 
-.catalog-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--panel-2); font-size: 12px; }
-.catalog-row:last-child { border-bottom: none; }
+.catalog-org { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 10px 0 4px 0; padding-top: 8px; border-top: 1px solid var(--panel-2); }
+.catalog-org:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.catalog-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 0 4px 8px; font-size: 12px; }
 .catalog-row .name { font-weight: 500; }
 .catalog-row .kind {
   display: inline-block; padding: 1px 7px; border-radius: 10px;

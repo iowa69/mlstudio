@@ -33,7 +33,7 @@ async def main() -> int:
     ap.add_argument("--out", default="docs/screens")
     ap.add_argument("--width", type=int, default=1600)
     ap.add_argument("--height", type=int, default=1000)
-    ap.add_argument("--suffix", default="_v5",
+    ap.add_argument("--suffix", default="_v6",
                     help="Append to filenames (cache-busting for the README).")
     args = ap.parse_args()
 
