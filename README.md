@@ -137,6 +137,24 @@ mlstudio call cgmlst --scheme saureus_cgmlst --input my_genome.fasta -t 24
 mlstudio gui /path/to/folder            # launch the UI, pre-filled
 ```
 
+## Build an ad-hoc cgMLST scheme from a reference genome
+
+No public scheme for your organism? Build one from a single annotated reference in **one command** — prodigal predicts CDS, self-BLAST drops paralogs, length filter trims fragments, and the scheme appears in your catalog ready to type against:
+
+```bash
+mlstudio schemes build-adhoc \
+    --reference path/to/reference.fasta \
+    --key mygenus_v1 \
+    --organism "My genus species"
+# → scheme cached locally with N filtered, non-paralogous CDS as loci
+```
+
+The scheme is immediately usable in `mlstudio call cgmlst --scheme mygenus_v1` and shows up in the WebUI catalog.
+
+## Incremental analysis
+
+Add new isolates to the same folder and re-run — MLSTudio caches each sample's calls under `<output_folder>/calls/` keyed by file size + modification time + scheme version. Unchanged samples are skipped, only new ones are typed. The MST is then recomputed across the full set in a couple of seconds.
+
 ## Optional: AMR gene scanning
 
 If you tick **Run AMR gene scan** in the sidebar, MLSTudio runs AMRFinderPlus alongside typing. Results are *displayed* in a separate column but **never contribute to the cgMLST allele-difference distance** — exactly as a clinician would want for outbreak investigation.

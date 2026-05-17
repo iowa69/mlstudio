@@ -19,10 +19,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mlstudio import __version__
+import hashlib
+import dataclasses
+
 from mlstudio.amr.amrfinderplus import ORGANISM_MAP, amrfinder_available, run_amrfinderplus
 from mlstudio.calling.cgmlst import call_cgmlst
 from mlstudio.calling.fastp_wrapper import run_fastp
-from mlstudio.calling.mlst import call_mlst
+from mlstudio.calling.mlst import call_mlst, MLSTResult, AlleleCall
 from mlstudio.io.scanner import Sample, scan
 from mlstudio.profiles.distance import hamming_matrix
 from mlstudio.profiles.mst import build_mst, mst_to_cytoscape
@@ -131,6 +134,19 @@ async def _run_job(job: Job) -> None:
                     except Exception as exc:
                         log.warning("fastp failed for %s: %s", sample.name, exc)
 
+                # Incremental cache: skip work if this assembly was already
+                # called against this scheme version. Key = path + size + mtime
+                # + scheme manifest mtime.
+                cache_dir = job.output_folder / "calls"
+                ck = _sample_cache_key(sample, scheme)
+                cached = _load_cached_result(cache_dir, ck)
+
+                if cached is not None:
+                    job.results.append(cached)
+                    job.message = f"[{i+1}/{len(samples)}] {sample.name} (cached)"
+                    job.notify()
+                    continue
+
                 # Call: cgMLST uses concatenated DB; MLST uses per-locus
                 caller = call_cgmlst if scheme.kind == "cgmlst" else call_mlst
                 t = max(1, job.threads or 4)
@@ -162,14 +178,16 @@ async def _run_job(job: Job) -> None:
                         ]
                     except Exception as e:
                         log.warning("AMRFinderPlus failed for %s: %s", sample.name, e)
-                job.results.append({
+                result_dict = {
                     "sample": result.sample,
                     "st": result.st,
                     "scheme": result.scheme,
                     "calls": {loc: asdict(c) for loc, c in result.calls.items()},
                     "notes": result.notes,
                     "input": _sample_to_dict(sample),
-                })
+                }
+                job.results.append(result_dict)
+                _save_cached_result(cache_dir, ck, result_dict)
         finally:
             executor.shutdown(wait=True)
 
@@ -226,21 +244,27 @@ def create_app() -> FastAPI:
     @app.get("/api/schemes")
     async def schemes() -> dict[str, Any]:
         local = list_local()
-        local_keys = {Path(s.root).name for s in local}
-        return {
-            "registry": [
-                {
-                    "key": k,
-                    "organism": r.organism,
-                    "scheme": r.scheme_label,
-                    "host": r.host,
-                    "kind": r.kind,
-                    "cluster_threshold": r.cluster_threshold,
-                    "cached": k in local_keys,
-                }
-                for k, r in REGISTRY.items()
-            ],
-        }
+        local_by_key = {Path(s.root).name: s for s in local}
+        out: list[dict[str, Any]] = []
+        # Built-in registry entries
+        for k, r in REGISTRY.items():
+            out.append({
+                "key": k, "organism": r.organism, "scheme": r.scheme_label,
+                "host": r.host, "kind": r.kind,
+                "cluster_threshold": r.cluster_threshold,
+                "cached": k in local_by_key, "adhoc": False,
+            })
+        # Ad-hoc (local-only) schemes not in registry
+        for k, s in local_by_key.items():
+            if k in REGISTRY:
+                continue
+            out.append({
+                "key": k, "organism": s.organism, "scheme": s.name,
+                "host": "local", "kind": s.kind,
+                "cluster_threshold": s.cluster_threshold,
+                "cached": True, "adhoc": True,
+            })
+        return {"registry": out}
 
     @app.post("/api/schemes/{key}/pull")
     async def schemes_pull(key: str) -> dict[str, Any]:
@@ -410,6 +434,29 @@ def create_app() -> FastAPI:
             return FileResponse(frontend_dir / "index.html")
 
     return app
+
+
+def _sample_cache_key(sample: Sample, scheme: Scheme) -> str:
+    """Fingerprint that changes only when the assembly or scheme changes."""
+    st = sample.assembly.stat()
+    scheme_hash = scheme.manifest_path.stat().st_mtime_ns if scheme.manifest_path.exists() else 0
+    raw = f"{sample.assembly.resolve()}|{st.st_size}|{st.st_mtime_ns}|{scheme.name}|{scheme_hash}"
+    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def _load_cached_result(cache_dir: Path, key: str) -> dict[str, Any] | None:
+    p = cache_dir / f"{key}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return None
+
+
+def _save_cached_result(cache_dir: Path, key: str, result: dict[str, Any]) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{key}.json").write_text(json.dumps(result))
 
 
 def _merge_identical(

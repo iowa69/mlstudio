@@ -122,6 +122,35 @@ def schemes_pull(
     console.print(f"[green]✓[/green] {scheme.name} ({len(scheme.loci)} loci) cached at {scheme.root}")
 
 
+@schemes_app.command("build-adhoc")
+def schemes_build_adhoc(
+    reference: Path = typer.Option(..., "--reference", exists=True,
+                                    help="Reference assembly FASTA."),
+    key: str = typer.Option(..., "--key", help="Registry key (e.g. mygenus_adhoc_v1)."),
+    organism: str = typer.Option(..., "--organism", help="Display name."),
+    threads: int = typer.Option(8, "--threads", "-t"),
+    min_length: int = typer.Option(200, "--min-length"),
+    cluster_threshold: int = typer.Option(5, "--cluster-threshold",
+                                           help="Default cluster halo distance for this scheme."),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Build a cgMLST scheme from one reference genome — one command, no wizard."""
+    from mlstudio.schemes.adhoc import build_adhoc_scheme
+
+    scheme = build_adhoc_scheme(
+        reference=reference, key=key, organism=organism,
+        cluster_threshold=cluster_threshold, threads=threads,
+        min_length=min_length, force=force,
+    )
+    console.print(
+        f"[green]✓[/green] Built [cyan]{key}[/cyan] · {organism} · "
+        f"{len(scheme.loci)} loci"
+    )
+    console.print(f"  Cached at {scheme.root}")
+    console.print("  Use immediately:")
+    console.print(f"  [dim]mlstudio call cgmlst --scheme {key} --input my_genome.fasta[/dim]")
+
+
 @call_app.command("mlst")
 def call_mlst_cmd(
     scheme: str = typer.Option(..., "--scheme", help="Scheme registry key."),

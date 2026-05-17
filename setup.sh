@@ -37,6 +37,7 @@ else
         "samtools>=1.20" \
         "fastp>=0.23" \
         "seqkit>=2.8" \
+        "prodigal>=2.6" \
         pip
 fi
 
