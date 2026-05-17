@@ -28,6 +28,8 @@ async def main() -> int:
     ap.add_argument("--base-url", default="http://127.0.0.1:8765")
     ap.add_argument("--job-id", default=None,
                     help="If set, inject this job's MST into the running UI for shots.")
+    ap.add_argument("--from-disk", default=None,
+                    help="Path to a job output folder containing mst.json + summary.tsv.")
     ap.add_argument("--out", default="docs/screens")
     ap.add_argument("--width", type=int, default=1600)
     ap.add_argument("--height", type=int, default=1000)
@@ -36,7 +38,7 @@ async def main() -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    # Pre-fetch job state via HTTP if requested
+    # Pre-fetch job state via HTTP or load from disk
     injected = None
     if args.job_id:
         async with httpx.AsyncClient(base_url=args.base_url) as client:
@@ -45,6 +47,29 @@ async def main() -> int:
             injected = r.json()
             assert injected["status"] == "done", f"Job not finished: {injected['status']}"
             print(f"Loaded job {args.job_id}: {injected['n_results']} samples")
+    elif args.from_disk:
+        disk = Path(args.from_disk)
+        mst = json.loads((disk / "mst.json").read_text())
+        # Reconstruct minimal results shape from summary.tsv
+        summary_lines = (disk / "summary.tsv").read_text().splitlines()
+        header = summary_lines[0].split("\t")
+        results = []
+        for line in summary_lines[1:]:
+            cols = line.split("\t")
+            row = dict(zip(header, cols))
+            exc = int(row.get("exc", 0)); inf = int(row.get("inf", 0))
+            lnf = int(row.get("lnf", 0)); n = int(row.get("n_loci", 0))
+            # Build a synthetic per-locus dict so the table renderer works
+            calls = {}
+            calls.update({f"loc{i}": {"allele": "*", "flag": "EXC"} for i in range(min(exc, 5))})
+            calls.update({f"loc{i}": {"allele": "*~", "flag": "INF"} for i in range(min(inf, 3))})
+            results.append({
+                "sample": row["sample"], "st": row.get("st") or None,
+                "calls": calls, "notes": [row.get("notes", "")],
+                "exc": exc, "inf": inf, "lnf": lnf, "n_loci": n,
+            })
+        injected = {"results": results, "mst": mst, "n_results": len(results)}
+        print(f"Loaded from disk: {len(results)} samples")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -63,15 +88,32 @@ async def main() -> int:
         await page.screenshot(path=str(out / "01_welcome.png"), full_page=False)
         print("  ✓ 01_welcome.png")
 
+        # 2. Folder browser modal
+        await page.evaluate("openBrowse('/home/iowa/Desktop')")
+        await page.wait_for_timeout(700)
+        await page.screenshot(path=str(out / "02_browse.png"), full_page=False)
+        print("  ✓ 02_browse.png")
+        await page.evaluate("document.getElementById('browse-modal').classList.add('hidden')")
+
         if injected:
-            # Bypass the UI flow: inject the completed job state directly.
             await page.evaluate(
                 """
                 ({results, mst}) => {
                     state.jobId = 'replayed';
                     state.results = results;
                     state.mst = mst;
-                    state.metaFields = ['st'];
+                    // Honor scheme cluster threshold from select
+                    const t = parseInt(document.getElementById('cluster-threshold').value) || 5;
+                    state.schemeClusterThreshold = t;
+                    state.clusterThreshold = t;
+                    const nodes = mst.elements.filter(e => !e.data.source);
+                    if (!nodes.some(n => n.data.cluster_id)) {
+                        attachClusterIds(mst, t);
+                    }
+                    const anySt = nodes.some(n => n.data.st);
+                    state.metaFields = anySt ? ['st', 'cluster_id'] : ['cluster_id', 'st'];
+                    populateColorFields();
+                    document.getElementById('color-field').value = anySt ? 'st' : 'cluster_id';
                     document.getElementById('empty-state').classList.add('hidden');
                     renderResults();
                     renderMst();
@@ -92,34 +134,17 @@ async def main() -> int:
             await page.screenshot(path=str(out / "03_mst.png"), full_page=False)
             print("  ✓ 03_mst.png")
 
-            # Threshold demo: collapse close clusters (e.g. distance <= 1)
-            max_edge = max(
-                (e["data"]["weight"] for e in injected["mst"]["elements"]
-                 if "source" in e["data"]),
-                default=0,
+            # Cluster halo: show how the cluster_threshold groups close isolates
+            await page.evaluate(
+                """
+                const t = state.schemeClusterThreshold || 5;
+                document.getElementById('cluster-threshold').value = t;
+                document.getElementById('cluster-threshold').dispatchEvent(new Event('input'));
+                """
             )
-            if max_edge > 0:
-                t = max(1, max_edge // 2)
-                await page.evaluate(
-                    f"""
-                    document.getElementById('threshold').value = {t};
-                    document.getElementById('threshold-val').textContent = '{t}';
-                    document.getElementById('threshold').dispatchEvent(new Event('input'));
-                    """
-                )
-                await page.wait_for_timeout(500)
-                await page.screenshot(path=str(out / "04_threshold.png"), full_page=False)
-                print("  ✓ 04_threshold.png")
-
-                # Reset threshold
-                await page.evaluate(
-                    f"""
-                    document.getElementById('threshold').value = {max_edge};
-                    document.getElementById('threshold-val').textContent = '{max_edge}';
-                    document.getElementById('threshold').dispatchEvent(new Event('input'));
-                    """
-                )
-                await page.wait_for_timeout(300)
+            await page.wait_for_timeout(1500)
+            await page.screenshot(path=str(out / "04_clusters.png"), full_page=False)
+            print("  ✓ 04_clusters.png")
 
             # Results table shot
             await page.evaluate(

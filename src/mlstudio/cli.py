@@ -151,10 +151,28 @@ def call_mlst_cmd(
 
 
 @call_app.command("cgmlst")
-def call_cgmlst_cmd() -> None:
-    """Run cgMLST calling (M3 — not yet implemented)."""
-    console.print("[yellow]cgMLST calling is stubbed; coming in M3.[/yellow]")
-    raise typer.Exit(code=1)
+def call_cgmlst_cmd(
+    scheme: str = typer.Option(..., "--scheme"),
+    assembly: Path = typer.Option(..., "--input", exists=True),
+    threads: int = typer.Option(0, "--threads", "-t"),
+    min_identity: float = typer.Option(90.0, "--min-identity"),
+    min_coverage: float = typer.Option(90.0, "--min-coverage"),
+) -> None:
+    """Call cgMLST on a single assembly (concatenated BLAST DB)."""
+    from mlstudio.calling.cgmlst import call_cgmlst as _call_cgmlst
+
+    sch = pull_scheme(scheme)
+    result = _call_cgmlst(assembly, sch, threads=threads,
+                          min_identity=min_identity, min_coverage=min_coverage)
+    exc = sum(1 for c in result.calls.values() if c.flag == "EXC")
+    inf = sum(1 for c in result.calls.values() if c.flag == "INF")
+    lnf = sum(1 for c in result.calls.values() if c.flag == "LNF")
+    console.print(
+        f"[cyan]{result.sample}[/cyan] · {scheme} · "
+        f"[green]{exc}[/green]/{len(sch.loci)} EXC, "
+        f"[yellow]{inf}[/yellow] INF, [red]{lnf}[/red] LNF"
+        + (f" · ST {result.st}" if result.st else "")
+    )
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@
     <span class="logo">M</span>
     <div>
       <h1>MLSTudio</h1>
-      <p class="tagline">MLST / cgMLST typing with an interactive minimum spanning tree</p>
+      <p class="tagline">MLST · cgMLST · interactive minimum spanning tree</p>
     </div>
   </div>
   <div class="topbar-actions">
@@ -25,30 +25,35 @@
 <main class="layout">
   <aside class="sidebar">
     <section class="panel">
-      <h2>1. Input folder</h2>
+      <h2>1 · Input folder</h2>
       <label class="field">
         <span>Folder path</span>
-        <input id="folder-input" type="text" placeholder="/path/to/genomes" />
+        <div style="display:flex;gap:6px">
+          <input id="folder-input" type="text" placeholder="Click Browse → pick a folder" style="flex:1" />
+          <button id="browse-btn" class="ghost" style="margin:0">Browse…</button>
+        </div>
       </label>
       <button id="scan-btn" class="primary">Scan folder</button>
-      <div id="scan-result" class="muted small"></div>
+      <div id="scan-result" class="muted small" style="margin-top:8px"></div>
     </section>
 
     <section class="panel">
-      <h2>2. Scheme</h2>
+      <h2>2 · Scheme</h2>
       <select id="scheme-select"></select>
-      <p class="muted small">First use of a scheme will download it (one-time).</p>
+      <p class="muted small" style="margin:6px 0 0 0">First use triggers a one-time download.</p>
     </section>
 
     <section class="panel">
-      <h2>3. Options</h2>
-      <label class="check">
-        <input type="checkbox" id="use-fastp" checked />
-        Run fastp on FASTQ pairs (auto-detect parameters)
-      </label>
+      <h2>3 · Options</h2>
+      <label class="check"><input type="checkbox" id="use-fastp" /> Run fastp on FASTQ pairs</label>
+      <label class="check"><input type="checkbox" id="run-amr" /> Run AMR gene scan (displayed, not part of distance)</label>
       <label class="field">
         <span>Threads (0 = auto)</span>
         <input id="threads" type="number" min="0" value="0" />
+      </label>
+      <label class="field">
+        <span>Output folder (optional)</span>
+        <input id="output-folder" type="text" placeholder="auto: <input_folder>/.mlstudio/" />
       </label>
     </section>
 
@@ -61,24 +66,35 @@
     </section>
 
     <section class="panel">
-      <h2>4. Metadata</h2>
+      <h2>4 · Metadata</h2>
       <input id="meta-file" type="file" accept=".csv,.tsv" />
-      <p class="muted small">First column = sample name. Other columns become available as color fields.</p>
+      <p class="muted small" style="margin:6px 0 0 0">First column = sample name. Remaining columns become color fields.</p>
     </section>
 
     <section class="panel">
-      <h2>5. Display</h2>
+      <h2>5 · Display</h2>
       <label class="field">
         <span>Color nodes by</span>
-        <select id="color-field"><option value="st">ST</option></select>
+        <select id="color-field"><option value="cluster_id">cluster_id</option><option value="st">ST</option></select>
       </label>
       <label class="field">
-        <span>Distance threshold</span>
+        <span>Edge label threshold</span>
         <input id="threshold" type="range" min="0" max="100" value="100" />
-        <div class="row"><span class="muted small">All edges</span><span id="threshold-val">100</span></div>
+        <div class="row"><span class="muted small">Hide edges above</span><span id="threshold-val">100</span></div>
       </label>
-      <button id="export-svg" class="ghost">Export SVG</button>
+      <label class="field">
+        <span>Cluster halo distance</span>
+        <input id="cluster-threshold" type="number" min="0" value="0" />
+        <div class="row muted small">Group isolates within this allele-difference</div>
+      </label>
+      <label class="check"><input type="checkbox" id="show-labels" checked /> Show sample labels</label>
       <button id="export-png" class="ghost">Export PNG</button>
+      <button id="fit-btn" class="ghost">Fit to screen</button>
+    </section>
+
+    <section class="panel">
+      <h2>6 · Scheme catalog</h2>
+      <div id="catalog-list"></div>
     </section>
   </aside>
 
@@ -88,20 +104,40 @@
     <div id="empty-state" class="empty-state">
       <h2>Welcome</h2>
       <ol>
-        <li>Enter a folder containing <code>.fasta</code> assemblies (optionally with matching paired-end <code>_R1_/_R2_</code> FASTQs).</li>
-        <li>Pick a scheme.</li>
+        <li>Enter a folder containing <code>.fasta</code> assemblies (optionally with paired-end <code>_R1_/_R2_</code> FASTQs).</li>
+        <li>Pick an MLST or cgMLST scheme — or pull a new one from the catalog.</li>
         <li>Click <b>Analyze</b>.</li>
-        <li>Upload an optional metadata CSV and pick a field to color by.</li>
+        <li>Upload a metadata CSV to color the tree by any field. Adjust the cluster halo distance to highlight outbreak clusters.</li>
       </ol>
-      <p class="muted">Tip: drag nodes to lay them out manually. Drag with right mouse button to pan. Scroll to zoom.</p>
+      <p class="muted small">Tip · drag nodes to re-arrange. Right-drag to pan. Scroll to zoom.</p>
     </div>
   </section>
 </main>
 
+<div id="browse-modal" class="modal hidden">
+  <div class="modal-card">
+    <header>
+      <h2>Pick a folder</h2>
+      <button id="browse-close" class="ghost mini">✕</button>
+    </header>
+    <div class="modal-body">
+      <div class="browse-path">
+        <button id="browse-up" class="ghost mini">↑ Up</button>
+        <code id="browse-cwd">~</code>
+        <span class="muted small" id="browse-summary"></span>
+      </div>
+      <ul id="browse-list" class="browse-list"></ul>
+    </div>
+    <footer>
+      <button id="browse-select" class="primary">Use this folder</button>
+    </footer>
+  </div>
+</div>
+
 <section id="results-panel" class="results-panel hidden">
   <header>
     <h2>Results</h2>
-    <button id="toggle-results" class="ghost">collapse ▾</button>
+    <button id="toggle-results" class="ghost mini">collapse ▾</button>
   </header>
   <div class="table-wrap">
     <table id="results-table">

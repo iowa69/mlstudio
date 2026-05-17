@@ -24,6 +24,8 @@ class Scheme:
     profile_table: Path | None = None
     source: str = ""
     last_updated: str = ""
+    kind: str = "mlst"
+    cluster_threshold: int = 0
 
     @property
     def loci_dir(self) -> Path:
@@ -32,6 +34,10 @@ class Scheme:
     @property
     def manifest_path(self) -> Path:
         return self.root / "manifest.json"
+
+    @property
+    def concat_fasta(self) -> Path:
+        return self.root / "all_loci.fasta"
 
     def locus_fasta(self, locus: str) -> Path:
         return self.loci_dir / f"{locus}.fasta"
@@ -49,4 +55,6 @@ class Scheme:
             profile_table=root / "profiles.tsv",
             source=manifest.get("source", ""),
             last_updated=manifest.get("last_updated", ""),
+            kind=manifest.get("kind", "mlst"),
+            cluster_threshold=manifest.get("cluster_threshold", 0),
         )
