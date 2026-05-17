@@ -65,6 +65,7 @@ results/
 *.sqlite
 *.db
 *.parquet
+.mlstudio/
 
 # Bioinformatics inputs (avoid accidental commits)
 *.fasta
