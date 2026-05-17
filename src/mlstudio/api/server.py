@@ -275,12 +275,9 @@ def create_app() -> FastAPI:
             })
         return {"registry": out}
 
-    @app.post("/api/schemes/{key}/pull")
-    async def schemes_pull(key: str) -> dict[str, Any]:
-        scheme = pull_scheme(key)
-        return {"ok": True, "name": scheme.name, "loci": scheme.loci}
-
     # ---- discoverable scheme browser ------------------------------------
+    # Define discover routes BEFORE /{key}/pull so they don't get
+    # swallowed by the wildcard path parameter.
     _discovery_cache: dict[str, Any] = {}
 
     @app.get("/api/schemes/discover")
@@ -301,7 +298,8 @@ def create_app() -> FastAPI:
         host / database / scheme_id / organism. Stored in the local cache and
         auto-appears in the catalog."""
         host = payload["host"].rstrip("/")
-        # Strip /api if present (BIGSdb-Pasteur uses /api/db, our client adds /api back)
+        # Strip /api if present (BIGSdb-Pasteur returns /api/db URLs, our
+        # bigsdb client adds /api back).
         if host.endswith("/api"):
             host = host[:-4]
         database = payload["database"]
@@ -309,9 +307,13 @@ def create_app() -> FastAPI:
         organism = payload["organism"]
         description = payload.get("description", "")
         kind = payload.get("kind") or _classify_scheme(description, database)
-        # Construct a key
-        org_slug = organism.split()[0][0].lower() + (organism.split()[1] if len(organism.split())>1 else "spp").lower()
-        key = f"{org_slug}_{kind}_{scheme_id}".replace(" ", "_")
+        # Build a stable key: try to derive the species from the database name
+        # (e.g. pubmlst_klebsiella_seqdef -> klebsiella). Falls back to first
+        # word of organism.
+        import re as _re
+        m = _re.match(r"^pubmlst_([a-z0-9]+)_seqdef$", database)
+        species_slug = m.group(1) if m else organism.split()[0].lower()
+        key = f"{species_slug}_{kind}_{scheme_id}"
         # Register on the fly
         REGISTRY[key] = SchemeRef(
             organism=organism, host=host, database=database,
@@ -319,10 +321,20 @@ def create_app() -> FastAPI:
             kind=kind,
             cluster_threshold=5 if kind == "cgmlst" else 0,
         )
-        scheme = await asyncio.get_running_loop().run_in_executor(
-            None, pull_scheme, key, False, None, 8,
-        )
+        try:
+            scheme = await asyncio.get_running_loop().run_in_executor(
+                None, pull_scheme, key, False, None, 8,
+            )
+        except Exception as e:
+            # Pop the bogus registry entry so the user can retry
+            REGISTRY.pop(key, None)
+            raise HTTPException(500, f"Pull failed: {e}")
         return {"ok": True, "key": key, "name": scheme.name, "loci": len(scheme.loci)}
+
+    @app.post("/api/schemes/{key}/pull")
+    async def schemes_pull(key: str) -> dict[str, Any]:
+        scheme = pull_scheme(key)
+        return {"ok": True, "name": scheme.name, "loci": scheme.loci}
 
     # ---- scanning -------------------------------------------------------
     @app.get("/api/scan")
