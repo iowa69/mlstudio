@@ -29,6 +29,12 @@
 <main class="layout">
   <aside class="sidebar">
     <section class="panel">
+      <h2>0 · Projects</h2>
+      <div id="project-list" class="project-list"></div>
+      <button id="save-project-btn" class="primary" style="margin-top:8px;width:100%" disabled>Save current as project…</button>
+    </section>
+
+    <section class="panel">
       <h2>1 · Input folder</h2>
       <label class="field">
         <span>Folder path</span>
@@ -49,11 +55,24 @@
 
     <section class="panel">
       <h2>3 · Options</h2>
+      <label class="field">
+        <span>Project name (also used to save)</span>
+        <input id="project-name" type="text" placeholder="my_kp_outbreak_may" />
+      </label>
       <label class="check"><input type="checkbox" id="use-fastp" /> Run fastp on FASTQ pairs</label>
       <label class="check"><input type="checkbox" id="run-amr" /> Run AMR gene scan (displayed, not part of distance)</label>
+      <label class="check"><input type="checkbox" id="skip-st" /> Skip ST lookup (just compute distances)</label>
       <label class="field">
         <span>Threads (0 = auto)</span>
         <input id="threads" type="number" min="0" value="0" />
+      </label>
+      <label class="field">
+        <span>Min identity %</span>
+        <input id="min-identity" type="number" min="50" max="100" step="0.5" placeholder="auto: 90 (cgMLST) / 95 (MLST)" />
+      </label>
+      <label class="field">
+        <span>Min coverage %</span>
+        <input id="min-coverage" type="number" min="50" max="100" step="0.5" placeholder="auto: 90" />
       </label>
       <label class="field">
         <span>Output folder (optional)</span>

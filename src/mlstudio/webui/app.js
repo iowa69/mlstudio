@@ -310,6 +310,10 @@ $('run-btn').addEventListener('click', async () => {
     threads: parseInt($('threads').value) || 0,
     use_fastp: $('use-fastp').checked,
     run_amr: $('run-amr').checked,
+    skip_st_lookup: $('skip-st').checked,
+    project_name: $('project-name').value.trim() || null,
+    min_identity: parseFloat($('min-identity').value) || null,
+    min_coverage: parseFloat($('min-coverage').value) || null,
     output_folder: $('output-folder').value.trim() || null,
   };
   setStatus('running', 'Starting…');
@@ -356,6 +360,7 @@ function subscribe(jobId) {
     if (snap.status === 'done') {
       setStatus('done', snap.message);
       $('run-btn').disabled = false;
+      $('save-project-btn').disabled = false;
       const result = await api('/jobs/' + jobId);
       state.results = result.results;
       state.mst = result.mst;
@@ -1271,9 +1276,114 @@ $('export-svg').addEventListener('click', () => {
   } catch (e) { alert('SVG export failed: ' + e.message); }
 });
 
+// ---- Projects (save / load named runs) ----------------------------------
+
+async function loadProjects() {
+  const root = $('project-list');
+  try {
+    const data = await api('/projects');
+    if (!data.projects.length) {
+      root.innerHTML = '<div class="project-empty">No saved projects yet. Run an analysis and click <b>Save current as project</b>.</div>';
+      return;
+    }
+    root.innerHTML = data.projects.map(p => `
+      <div class="project-row" data-name="${escapeHtml(p.safe_name)}">
+        <div>
+          <div class="pj-name">${escapeHtml(p.name)}</div>
+          <div class="pj-meta">${p.n_samples} samples · ${p.scheme_key} · ${(p.created_at || '').slice(0, 16)}</div>
+        </div>
+        <span class="pj-del" data-name="${escapeHtml(p.safe_name)}" title="Delete">×</span>
+      </div>
+    `).join('');
+    root.querySelectorAll('.project-row').forEach(r => {
+      r.addEventListener('click', (e) => {
+        if (e.target.classList.contains('pj-del')) return;
+        loadProject(r.dataset.name);
+      });
+    });
+    root.querySelectorAll('.pj-del').forEach(d => {
+      d.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete project "${d.dataset.name}"?`)) return;
+        await fetch('/api/projects/' + encodeURIComponent(d.dataset.name), { method: 'DELETE' });
+        loadProjects();
+      });
+    });
+  } catch (e) {
+    root.innerHTML = `<div class="project-empty">Error: ${e.message}</div>`;
+  }
+}
+
+async function loadProject(name) {
+  try {
+    const p = await api('/projects/' + encodeURIComponent(name));
+    state.jobId = 'project:' + name;
+    state.results = p.results;
+    state.mst = p.mst;
+    state.metaBySample = p.metadata || {};
+    state.amr_results = p.amr || {};
+    state.schemeClusterThreshold = p.manifest.scheme_cluster_threshold || 0;
+    state.clusterThreshold = state.schemeClusterThreshold;
+    $('cluster-threshold').value = state.schemeClusterThreshold;
+    $('cluster-threshold-val').textContent = state.schemeClusterThreshold;
+    // Rebuild metaFields from results + metadata
+    const nodes = state.mst.elements.filter(e => !e.data.source);
+    if (!nodes.some(n => n.data.cluster_id)) attachClusterIds(state.mst, state.clusterThreshold);
+    const anySt = nodes.some(n => n.data.st);
+    const metaFs = new Set();
+    for (const v of Object.values(state.metaBySample)) Object.keys(v).forEach(k => metaFs.add(k));
+    state.metaFields = anySt ? ['st', 'cluster_id', ...metaFs] : ['cluster_id', 'st', ...metaFs];
+    populateColorFields();
+    $('empty-state').classList.add('hidden');
+    $('save-project-btn').disabled = false;
+    setStatus('done', `Loaded project "${p.manifest.name}" (${p.results.length} samples)`);
+    renderComparisonTable();
+    renderMst();
+  } catch (e) {
+    alert('Load failed: ' + e.message);
+  }
+}
+
+$('save-project-btn').addEventListener('click', async () => {
+  if (!state.jobId) return;
+  const suggested = $('project-name').value.trim() ||
+                    `${state.schemeKey || 'run'}_${new Date().toISOString().slice(0,10)}`;
+  const name = prompt('Project name:', suggested);
+  if (!name) return;
+  // If the current "job" is a loaded project, save it under a job id we
+  // don't have — the server only knows live jobs. So we route through a
+  // fresh save endpoint that takes the in-memory state. For now: only
+  // saving live jobs. Show a hint.
+  if (state.jobId.startsWith('project:')) {
+    alert('This is already a loaded project. Re-run the analysis to save under a new name.');
+    return;
+  }
+  try {
+    const r = await fetch(`/api/jobs/${state.jobId}/save`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    await r.json();
+    await loadProjects();
+    alert(`Saved as "${name}"`);
+  } catch (e) {
+    alert('Save failed: ' + e.message);
+  }
+});
+
+// Enable Save button when a job finishes
+const _origSubscribe = subscribe;
+subscribe = function(jobId) {
+  _origSubscribe(jobId);
+};
+// hooks into existing onmessage path — already calls renderMst which sets state.jobId
+
 // ---- Init ------------------------------------------------------------------
 
 loadCatalog().catch(e => console.error(e));
+loadProjects().catch(e => console.error(e));
 
 // Auto-fill folder from ?folder= URL param
 const urlParams = new URLSearchParams(location.search);

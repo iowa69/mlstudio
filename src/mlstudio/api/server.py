@@ -41,6 +41,11 @@ log = logging.getLogger(__name__)
 JOBS: dict[str, "Job"] = {}
 
 
+def projects_root() -> Path:
+    """Where saved projects live."""
+    return cache_root().parent / "projects"
+
+
 class Job:
     def __init__(self, job_id: str, folder: Path, scheme_key: str, threads: int,
                  use_fastp: bool, run_amr: bool = False,
@@ -92,6 +97,10 @@ class AnalyzeRequest(BaseModel):
     use_fastp: bool = True
     run_amr: bool = False
     output_folder: str | None = None
+    project_name: str | None = None
+    min_identity: float | None = None
+    min_coverage: float | None = None
+    skip_st_lookup: bool = False
 
 
 def _sample_to_dict(s: Sample) -> dict[str, Any]:
@@ -423,6 +432,88 @@ def create_app() -> FastAPI:
         )
         job.distance_policy = policy
         return {"ok": True, "policy": policy, "mst": job.mst}
+
+    # ---- Projects (saved named runs) ------------------------------------
+    @app.get("/api/projects")
+    async def projects_list() -> dict[str, Any]:
+        """All previously saved projects, newest first."""
+        root = projects_root()
+        if not root.is_dir():
+            return {"projects": []}
+        items: list[dict[str, Any]] = []
+        for d in root.iterdir():
+            m = d / "manifest.json"
+            if not m.exists():
+                continue
+            try:
+                items.append({**json.loads(m.read_text()), "path": str(d)})
+            except Exception:
+                pass
+        items.sort(key=lambda p: p.get("created_at", ""), reverse=True)
+        return {"projects": items}
+
+    @app.post("/api/jobs/{job_id}/save")
+    async def save_job_as_project(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Persist a finished job under a friendly name."""
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "Unknown job")
+        if job.status != "done":
+            raise HTTPException(400, f"Job not finished (status={job.status})")
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name required")
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
+        target = projects_root() / safe
+        target.mkdir(parents=True, exist_ok=True)
+        # Save results, MST, metadata
+        (target / "results.json").write_text(json.dumps(job.results))
+        if job.mst:
+            (target / "mst.json").write_text(json.dumps(job.mst))
+        if job.metadata:
+            (target / "metadata.json").write_text(json.dumps(job.metadata))
+        if job.amr_results:
+            (target / "amr.json").write_text(json.dumps(job.amr_results))
+        # Manifest
+        from datetime import datetime
+        manifest = {
+            "name": name, "safe_name": safe,
+            "folder": str(job.folder), "scheme_key": job.scheme_key,
+            "n_samples": len(job.results),
+            "scheme_loci": len(job.scheme_loci),
+            "scheme_cluster_threshold": job.scheme_cluster_threshold,
+            "distance_policy": job.distance_policy,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        (target / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        return {"ok": True, "name": name, "path": str(target)}
+
+    @app.get("/api/projects/{name}")
+    async def project_load(name: str) -> dict[str, Any]:
+        """Hydrate a saved project back into a snapshot the UI can render."""
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
+        d = projects_root() / safe
+        if not d.is_dir():
+            raise HTTPException(404, "Unknown project")
+        manifest = json.loads((d / "manifest.json").read_text())
+        results = json.loads((d / "results.json").read_text()) if (d / "results.json").exists() else []
+        mst = json.loads((d / "mst.json").read_text()) if (d / "mst.json").exists() else None
+        metadata = json.loads((d / "metadata.json").read_text()) if (d / "metadata.json").exists() else {}
+        amr = json.loads((d / "amr.json").read_text()) if (d / "amr.json").exists() else {}
+        return {
+            "manifest": manifest, "results": results, "mst": mst,
+            "metadata": metadata, "amr": amr,
+        }
+
+    @app.delete("/api/projects/{name}")
+    async def project_delete(name: str) -> dict[str, Any]:
+        import shutil as _sh
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
+        d = projects_root() / safe
+        if not d.is_dir():
+            raise HTTPException(404, "Unknown project")
+        _sh.rmtree(d)
+        return {"ok": True}
 
     @app.get("/api/jobs/{job_id}/stats")
     async def job_stats(job_id: str) -> dict[str, Any]:

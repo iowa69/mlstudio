@@ -147,6 +147,15 @@ button.mini:hover { background: var(--panel); }
 
 /* Legacy bottom panel removed — superseded by the Comparison Table tab. */
 
+.project-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+.project-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 12px; background: var(--panel-2); transition: all 0.12s; }
+.project-row:hover { background: #e2e8f0; }
+.project-row .pj-name { font-weight: 600; }
+.project-row .pj-meta { color: var(--text-muted); font-size: 11px; }
+.project-row .pj-del { opacity: 0.4; cursor: pointer; padding: 2px 5px; }
+.project-row .pj-del:hover { opacity: 1; color: var(--err); }
+.project-empty { color: var(--text-muted); font-size: 12px; padding: 6px 0; }
+
 .catalog-org { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 10px 0 4px 0; padding-top: 8px; border-top: 1px solid var(--panel-2); }
 .catalog-org:first-child { border-top: none; padding-top: 0; margin-top: 0; }
 .catalog-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 0 4px 8px; font-size: 12px; }
