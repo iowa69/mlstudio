@@ -140,10 +140,22 @@ async def _pull_scheme_async(ref: SchemeRef, root: Path, concurrency: int = 20) 
         meta = r.json()
         loci = [loc.rsplit("/", 1)[-1] for loc in meta["loci"]]
 
+        # profiles_csv is optional — many large cgMLST schemes are loci-only
+        # (no central ST registry). 404 here is normal; smaller schemes (7-gene
+        # MLST) do have one. Either way write a stub so call_mlst can read it.
         prof_url = f"{ref.host}/api/db/{ref.database}/schemes/{ref.scheme_id}/profiles_csv"
-        rp = await client.get(prof_url)
-        rp.raise_for_status()
-        (root / "profiles.tsv").write_text(rp.text)
+        try:
+            rp = await client.get(prof_url)
+            if rp.status_code == 200:
+                (root / "profiles.tsv").write_text(rp.text)
+            else:
+                log.info("No profiles_csv for %s (HTTP %d) — scheme is loci-only.",
+                         ref.scheme_label, rp.status_code)
+                (root / "profiles.tsv").write_text("ST\n")
+        except httpx.HTTPError as e:
+            log.info("profiles_csv fetch failed for %s: %s — writing stub.",
+                     ref.scheme_label, e)
+            (root / "profiles.tsv").write_text("ST\n")
 
         sem = asyncio.Semaphore(concurrency)
         tasks = []
