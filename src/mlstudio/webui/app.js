@@ -150,16 +150,38 @@ function renderMst() {
 
   if (state.cy) state.cy.destroy();
 
+  // Inject _color into each node's data based on the current color field,
+  // so the stylesheet can pick it up via data() mapping.
+  const initialField = $('color-field').value || 'st';
+  state.currentPalette = paletteFor(state.mst.elements, initialField);
+  const elementsWithColor = state.mst.elements.map(el => {
+    if (!el.data.source) {
+      const v = el.data[initialField];
+      return { ...el, data: { ...el.data, _color: state.currentPalette[v] || '#4a9eff' } };
+    }
+    return el;
+  });
+
   state.cy = cytoscape({
     container: $('cy'),
-    elements: state.mst.elements,
-    layout: { name: 'cose-bilkent', randomize: false, animate: false, nodeDimensionsIncludeLabels: true, idealEdgeLength: 80 },
+    elements: elementsWithColor,
+    layout: {
+      name: 'cose',
+      randomize: false,
+      animate: false,
+      nodeDimensionsIncludeLabels: true,
+      idealEdgeLength: 90,
+      nodeRepulsion: 8000,
+      edgeElasticity: 100,
+      gravity: 0.4,
+      numIter: 2500,
+    },
     wheelSensitivity: 0.2,
     style: [
       {
         selector: 'node',
         style: {
-          'background-color': '#4a9eff',
+          'background-color': 'data(_color)',
           'label': 'data(label)',
           'color': '#e4e8ef',
           'font-size': '11px',
@@ -223,28 +245,34 @@ function populateColorFields() {
 }
 
 function colorFor(values) {
-  // Stable hash → HSL
   const palette = {};
   let i = 0;
   for (const v of values) {
     if (v == null || v === '') continue;
     if (!(v in palette)) {
       const hue = (i * 137.5) % 360;
-      palette[v] = `hsl(${hue} 65% 60%)`;
+      palette[v] = `hsl(${hue}, 65%, 60%)`;
       i++;
     }
   }
   return palette;
 }
 
+function paletteFor(elements, field) {
+  const values = elements
+    .filter(e => !e.data.source)
+    .map(e => e.data[field]);
+  return colorFor(values);
+}
+
 function applyColoring() {
   if (!state.cy) return;
   const field = $('color-field').value;
-  const values = state.cy.nodes().map(n => n.data(field));
-  const palette = colorFor(values);
+  const palette = paletteFor(state.mst.elements, field);
+  state.currentPalette = palette;
   state.cy.nodes().forEach(n => {
     const v = n.data(field);
-    n.style('background-color', palette[v] || '#4a9eff');
+    n.data('_color', palette[v] || '#4a9eff');
   });
   renderLegend(field, palette);
 }

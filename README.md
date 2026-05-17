@@ -1,100 +1,111 @@
 # MLSTudio
 
-**A free, open-source, Linux-only alternative to Ridom SeqSphere for MLST and cgMLST analysis — with a polished interactive Minimum Spanning Tree GUI.**
+**A polished, open-source Linux tool for MLST / cgMLST typing with an interactive Minimum Spanning Tree viewer.**
 
-> Status: **pre-alpha / scaffold**. See [ROADMAP.md](ROADMAP.md) for the milestone plan.
+> Status: **active development**. End-to-end MLST pipeline + WebUI working today; cgMLST and read-backed rescue land next. See [ROADMAP.md](ROADMAP.md).
 
 ---
 
-## What it is
+## What it does
 
-MLSTudio combines best-in-class free typing engines with a GUI that's actually pleasant to use. The goal is to make running and exploring a cgMLST analysis on Linux as friction-free as the commercial tools — without the licence cost.
+Point it at a folder of assembled bacterial genomes (and optionally their paired-end Illumina reads). It pulls the appropriate typing scheme from public databases, calls alleles with BLAST across all available cores, assigns Sequence Types, computes pairwise allele distances, and renders an interactive minimum spanning tree in your browser — with live threshold filtering, metadata-driven coloring, and publication-quality export.
 
-- **MLST + cgMLST calling** — multicore BLAST primary call, Bowtie2 read-backed rescue for missing/spurious alleles
-- **AMRFinderPlus** integration for resistance gene annotation alongside typing
-- **Auto-setup of schemes & dependencies** — one command pulls PubMLST, cgMLST.org schemes, BLAST+, Bowtie2, samtools, AMRFinderPlus via conda
-- **Interactive Minimum Spanning Tree** — Cytoscape.js-powered, movable nodes, live threshold slider, metadata coloring, publication-quality export
-- **Local web app** — runs entirely on your machine, no cloud, no telemetry. `mlstudio gui` opens it in your browser.
+- **Auto-downloads typing schemes** from PubMLST.org and BIGSdb-Pasteur, version-pinned and cached locally
+- **Multicore BLAST** for fast allele calling on dozens to hundreds of genomes
+- **fastp QC** on paired-end FASTQs with sequencing-data-aware auto-tuned parameters
+- **Interactive MST** — drag nodes, slide a threshold to collapse close clusters, color by any metadata field, export PNG
+- **Metadata-aware** — upload a simple CSV and re-color the tree on the fly
+- **Local-only** — runs entirely on your machine, no cloud, no telemetry
+- **One-shot install** — `./setup.sh` provisions a conda environment with every external tool (BLAST+, Bowtie2, samtools, fastp, seqkit)
 
 ## What it is *not*
 
-- Not a genome assembler. Input is assembled contigs (FASTA) or short reads (for the rescue step).
-- Not Windows/macOS. Linux only, by design.
-- Not a SeqSphere clone in week one. v1 fills the integration gap; full UX parity is a multi-year goal.
+- Not a genome assembler — input is assembled contigs (and optionally short reads for the rescue step).
+- Not Windows / macOS — Linux only by design.
 
-## Why this exists
+## Screenshots
 
-Existing free tools each cover a slice:
+![Welcome screen](docs/screens/01_welcome.png)
 
-| Tool          | cgMLST calling | Interactive MST | Integrated |
-|---------------|:--------------:|:---------------:|:----------:|
-| chewBBACA     | ✅             | ❌              | ❌         |
-| GrapeTree     | ❌             | ✅              | ❌         |
-| PHYLOViZ      | ❌             | ⚠️ (older)      | ❌         |
-| mlst (Seemann)| ⚠️ (MLST only) | ❌              | ❌         |
-| **MLSTudio**  | ✅             | ✅              | ✅         |
+*The welcome screen — point at a folder, pick a scheme, click **Analyze**.*
 
-There is no integrated, polished, *local* Linux tool combining calling + interactive visualization. MLSTudio fills that gap.
+![Minimum spanning tree of 67 isolates](docs/screens/03_mst.png)
+
+*Interactive minimum spanning tree of 67 Staphylococcus aureus isolates, colored by Sequence Type. Drag nodes, scroll to zoom, click for details. The clusters of identical-color nodes are clonal groups (e.g. ST 398, ST 5, ST 22).*
+
+![Threshold filtering](docs/screens/04_threshold.png)
+
+*The distance threshold slider hides edges above the chosen allele-difference cutoff — making clonal groups pop out and revealing the true population structure at a glance.*
+
+![Per-isolate results table](docs/screens/05_table.png)
+
+*The results panel: every isolate, its assigned ST, every per-locus allele call, and any flags. Inexact matches (`INF`) and novel allele combinations are surfaced explicitly — see ST `9233*` (inexact) and the row marked "novel allele combination — no matching ST".*
 
 ## Quickstart
 
 ```bash
 # Clone and bootstrap (creates the `mlstudio` conda env with all bio + Python deps)
-git clone git@github.com:iowa69/mlstudio.git && cd mlstudio
+git clone https://github.com/iowa69/mlstudio.git && cd mlstudio
 ./setup.sh
 conda activate mlstudio
 
-# One-time: download a scheme (PubMLST or BIGSdb-Pasteur)
-mlstudio schemes list --remote        # see available scheme keys
-mlstudio schemes pull lmonocytogenes_mlst
+# Pull a scheme once (e.g. S. aureus)
+mlstudio schemes list --remote
+mlstudio schemes pull saureus_mlst
 
-# Smoke-test the MLST caller on a single assembly
-mlstudio call mlst --scheme lmonocytogenes_mlst \
-    --input test_data/demo_folder/EGD-e.fasta
-# → ST 35 (matches the well-known Listeria EGD-e reference)
+# Smoke-test the caller on a single assembly
+mlstudio call mlst --scheme saureus_mlst --input path/to/genome.fasta
 
-# Launch the WebUI: point it at a folder of .fasta (+ optional R1/R2 FASTQs)
+# Launch the WebUI on a folder
 mlstudio gui /path/to/folder
 ```
 
-Working end-to-end as of M0.5: scheme auto-download · multi-sample BLAST · ST
-assignment · pairwise Hamming distance · Minimum Spanning Tree · interactive
-Cytoscape.js viewer with threshold slider · metadata CSV upload + recoloring ·
-fastp QC on paired-end reads with auto-detected parameters.
+## Input layout
 
-cgMLST, Bowtie2 rescue, and AMRFinderPlus are scaffolded but not wired up yet —
-see [ROADMAP.md](ROADMAP.md) M3–M4.
+The folder you point the tool at can contain either FASTA-only or FASTA + matching paired-end FASTQs:
 
-## Architecture (planned)
+```
+my_run/
+├── isolate_001.fasta
+├── isolate_001_R1.fastq.gz   ← optional
+├── isolate_001_R2.fastq.gz   ← optional
+├── isolate_002.fasta
+└── isolate_002.fasta         ← FASTA-only is fine too
+```
+
+Supported read-pair naming patterns: `_R1_/_R2_`, `_1./_2.`, `.R1./.R2.`, `.1./.2.`. The sample name is the FASTA stem.
+
+## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Browser (Vue 3 + Cytoscape.js)                          │
+│  Browser (Cytoscape.js)                                  │
 │   ├─ MST viewer (movable nodes, threshold slider)        │
-│   ├─ Profile/metadata tables                             │
-│   └─ Cluster analysis panels                             │
+│   ├─ Profile / metadata tables                           │
+│   └─ Coloring & legend                                   │
 └──────────────────────────┬───────────────────────────────┘
                            │  HTTP + WebSocket (localhost)
 ┌──────────────────────────▼───────────────────────────────┐
 │  FastAPI backend (mlstudio.api)                          │
-│   ├─ schemes/  — PubMLST / cgMLST.org / Ridom            │
-│   ├─ calling/  — BLAST (multicore) + Bowtie2 rescue      │
-│   ├─ amr/      — AMRFinderPlus wrapper                   │
-│   └─ profiles/ — SQLite store, distance matrix, MST      │
+│   ├─ schemes/  — PubMLST + BIGSdb-Pasteur clients        │
+│   ├─ calling/  — BLAST (multicore) + fastp + rescue*     │
+│   ├─ profiles/ — Hamming distance, MST construction      │
+│   └─ io/       — folder scanner, FASTQ pairing           │
 └──────────────────────────┬───────────────────────────────┘
                            │  subprocess
                 ┌──────────▼──────────┐
-                │  BLAST+ / Bowtie2 / │
-                │  samtools / AMR+    │
+                │  BLAST+ · Bowtie2*  │
+                │  samtools · fastp   │
                 └─────────────────────┘
+                  * cgMLST + rescue: roadmap M3
 ```
 
 ## Tech stack
 
-- **Backend**: Python 3.11+, FastAPI, multiprocessing, BioPython, pysam
-- **Frontend**: Vue 3, Vite, Pinia, Tailwind, Cytoscape.js
-- **Storage**: SQLite (profiles, metadata), Parquet (distance matrices)
-- **Packaging**: Bioconda (engine), AppImage (bundled GUI)
+- **Backend**: Python 3.11+, FastAPI, multiprocessing, NetworkX, NumPy, BioPython, pysam, httpx
+- **Frontend**: HTML + ES2020 + Cytoscape.js (cose-bilkent layout), loaded from CDN — no Node toolchain required
+- **Storage**: Local file cache for schemes + per-job in-memory state (SQLite persistence on the roadmap)
+- **Packaging**: Conda env via `setup.sh` (Bioconda release on the roadmap)
 
 ## License
 

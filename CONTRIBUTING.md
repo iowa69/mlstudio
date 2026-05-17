@@ -22,11 +22,11 @@ pytest --cov
 
 ## Areas where help is welcome
 
-- PubMLST API client (M1)
-- cgMLST.org downloader (M1)
-- Benchmark datasets / ground-truth labels (M10)
+- cgMLST calling + read-backed rescue (M3)
+- Species auto-detection from assemblies (M6)
 - Cytoscape.js styling — getting the visual polish right (M7)
 - Conda recipe / packaging (M9)
+- Benchmark datasets / ground-truth labels (M10)
 
 ## Communication
 

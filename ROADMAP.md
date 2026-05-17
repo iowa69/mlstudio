@@ -4,7 +4,7 @@
 
 ## Vision
 
-A free, polished, integrated Linux desktop experience for bacterial MLST / cgMLST typing and visualization. Equal to Ridom SeqSphere in *daily usability* on the analyses 80% of users actually run; free and open where SeqSphere is commercial and closed.
+A polished, integrated Linux desktop experience for bacterial MLST / cgMLST typing and visualization. Built around the daily workflow of public-health microbiology, lab QC, and outbreak investigation — open-source, local-first, no licence cost.
 
 ## Non-goals
 
@@ -12,14 +12,13 @@ A free, polished, integrated Linux desktop experience for bacterial MLST / cgMLS
 - No Windows or macOS native build (PRs welcome later, not a v1 priority).
 - No cloud / SaaS — fully local.
 - No phylogenetic tree inference (ML / Bayesian) — MST only for v1.
-- No proprietary scheme distribution — only public/free schemes (PubMLST, cgMLST.org, public Ridom schemes).
+- No redistribution of any scheme that is not freely licensed for redistribution.
 
 ## Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                       Browser (localhost)                      │
-│  Vue 3 + Pinia + Tailwind                                      │
 │                                                                │
 │  ┌─ MST Viewer (Cytoscape.js) ──────────────────────────────┐  │
 │  │  • Movable nodes, lasso, threshold slider                │  │
@@ -36,7 +35,7 @@ A free, polished, integrated Linux desktop experience for bacterial MLST / cgMLS
 ┌────────────────────────────────────────────────────────────────┐
 │           FastAPI backend  (mlstudio.api.server)               │
 │                                                                │
-│  schemes/   PubMLST + cgMLST.org + Ridom public                │
+│  schemes/   BIGSdb-compatible clients (PubMLST / Pasteur)      │
 │             auto-download, version-pinning, scheme registry    │
 │                                                                │
 │  calling/   MLST  →  BLAST allele lookup                       │
@@ -52,36 +51,38 @@ A free, polished, integrated Linux desktop experience for bacterial MLST / cgMLS
 └──────────────────┬─────────────────────────────────────────────┘
                    │  subprocess
                    ▼
-       ncbi-blast+ · bowtie2 · samtools · ncbi-amrfinderplus
+       ncbi-blast+ · bowtie2 · samtools · fastp · ncbi-amrfinderplus
        (all installed via conda dependency)
 ```
 
 ## Milestones
 
-### M0 — Repo scaffold ✅ (this commit)
-- README, LICENSE, .gitignore, ROADMAP
+### M0 — Repo scaffold ✅
+- Top-level docs (README, LICENSE, ROADMAP, CONTRIBUTING, CI)
 - Python package skeleton with submodules
 - pyproject.toml with `mlstudio` console-script entry point
-- CI workflow (lint + test stub)
 
-### M1 — Scheme manager
-- PubMLST API client (`/db` endpoint, schemes, loci, profile downloads)
-- cgMLST.org scrape/API for public cgMLST schemes
-- Local scheme cache (`~/.mlstudio/schemes/<species>/<scheme>/v<version>/`)
-- CLI: `mlstudio schemes list`, `schemes pull <name>`, `schemes update <name>`
+### M1 — Scheme manager ✅
+- BIGSdb / PubMLST REST client (works against PubMLST.org and BIGSdb-Pasteur)
+- Local scheme cache (`~/.local/share/mlstudio/schemes/<key>/`)
+- CLI: `mlstudio schemes list`, `schemes pull <key>`
 - SHA-256 manifest per scheme version for reproducibility
 
-### M2 — MLST calling
-- BLAST+ wrapper with multiprocessing job pool (1 job per genome)
-- Allele lookup → ST assignment from profiles table
-- Output: per-genome JSON + project-level TSV
-- CLI: `mlstudio call mlst --scheme <name> --input <dir|file>`
-- Benchmark vs `mlst` (Seemann) for correctness parity
+### M2 — MLST calling ✅
+- BLAST+ wrapper with multiprocessing job pool
+- Allele lookup → ST assignment from profile table
+- EXC / INF / LNF flagging per locus
+- CLI: `mlstudio call mlst --scheme <key> --input <fasta>`
+
+### M2.5 — Web UI ✅
+- FastAPI local server with REST + WebSocket progress
+- Cytoscape.js minimum spanning tree viewer
+- Live threshold slider, metadata CSV upload, color-by-field, PNG export
+- `mlstudio gui [folder]` launches the experience
 
 ### M3 — cgMLST calling with rescue
 - Two-stage call: BLAST primary → Bowtie2 read-backed rescue for missing/spurious loci
 - Configurable identity/coverage thresholds
-- ASM/INF/LNF/PLOT5/PLOT3 chewBBACA-style allele class annotation
 - Smart caching: skip recomputation for unchanged inputs
 
 ### M4 — AMRFinderPlus integration
@@ -89,26 +90,22 @@ A free, polished, integrated Linux desktop experience for bacterial MLST / cgMLS
 - Run alongside typing, join results into the profile table
 - GUI panel: per-isolate AMR gene/mutation summary
 
-### M5 — Profile DB + distance matrix
+### M5 — Profile DB + distance polish
 - SQLite schema: isolates, profiles, metadata, AMR hits, scheme version
-- Hamming distance computation (vectorized numpy / numba)
-- MST construction (goeBURST / classic Prim with allele-difference tie-breaking)
-- Parquet caching for large matrices
+- Vectorized Hamming over numpy/numba
+- goeBURST tie-breaking on MST construction
 
-### M6 — FastAPI server + minimal Vue frontend
-- `mlstudio gui` launches local server on auto-picked port, opens browser
-- REST endpoints: `/isolates`, `/distances`, `/mst`, `/schemes`, `/jobs`
-- WebSocket for job progress
-- Basic isolate table view in Vue
+### M6 — Species auto-detection
+- Identify organism from assembly by hitting all locally-cached scheme allele DBs in parallel
+- Pick the scheme with the most high-identity hits across its loci
+- Fall back to a manual scheme picker when ambiguous
 
-### M7 — Cytoscape.js MST 🎯 differentiator
-- Force-directed layout with stable random seed
-- Live threshold slider (slider value → edges collapsed → clusters recomputed)
-- Drag nodes / pin positions
-- Metadata-driven coloring (categorical / numeric / pie-chart composites)
-- Selection / lasso / cluster highlight
-- Smooth zoom & pan, minimap
-- Export: SVG, PNG (high-DPI), GraphML, Newick (for cluster summaries)
+### M7 — Cytoscape.js polish 🎯 differentiator
+- Stable layout with random-seed pinning
+- Drag nodes / pin positions / lasso selection
+- Pie-chart composite nodes when grouping samples
+- Minimap, smooth zoom & pan
+- Export: SVG, PNG (high-DPI), GraphML, Newick
 
 ### M8 — Project workspace
 - Save/load project files (`.mlsproj` = zip of SQLite + metadata + figures)
@@ -118,12 +115,11 @@ A free, polished, integrated Linux desktop experience for bacterial MLST / cgMLS
 
 ### M9 — Packaging
 - Bioconda recipe for the engine
-- AppImage for the bundled GUI (includes Python + frontend dist)
+- AppImage for the bundled GUI
 - Documentation site (mkdocs-material)
 
 ### M10 — Benchmark paper
-- Datasets: published cgMLST benchmarks (Listeria, S. aureus, K. pneumoniae outbreaks)
-- Compare MLSTudio vs chewBBACA+GrapeTree vs SeqSphere (if access available) vs PHYLOViZ
+- Datasets: published outbreak panels (Listeria, S. aureus, K. pneumoniae)
 - Metrics: calling accuracy, runtime, peak memory, time-to-figure
 - Target journals: Microbial Genomics, Bioinformatics Advances
 
@@ -132,14 +128,14 @@ A free, polished, integrated Linux desktop experience for bacterial MLST / cgMLS
 | Risk | Mitigation |
 |------|------------|
 | Cytoscape.js perf >5k nodes | Sigma.js/WebGL fallback for very large projects |
-| Scheme licensing (Ridom proprietary schemes) | Only ship/redistribute public schemes; document how to import private schemes locally |
+| Scheme licensing | Only redistribute / cache schemes that are freely licensed; document how to import private schemes locally |
 | Bowtie2 rescue slower than expected | Make rescue optional; offer minimap2 alternative |
-| Bioconda recipe complexity (native deps) | Lean on existing recipes (blast, bowtie2, amrfinderplus already packaged) |
-| Single-maintainer bus factor | Public dev from M3 onward, RFC-style design docs, encourage contributors |
+| Bioconda recipe complexity (native deps) | Lean on existing recipes (blast, bowtie2, fastp already packaged) |
+| Single-maintainer bus factor | Public dev from now, RFC-style design docs, encourage contributors |
 
 ## Open questions
 
-- goeBURST vs classic Prim MST: do users want both?
+- goeBURST vs classic Prim MST: do users want both, or just one with sensible defaults?
 - Should AMRFinderPlus run be optional per project, or always-on?
 - WebSocket vs Server-Sent Events for job progress?
 - AppImage vs Flatpak — which has lower friction for academic bioinformaticians?
