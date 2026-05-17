@@ -27,63 +27,82 @@ log = logging.getLogger(__name__)
 DEFAULT_IDENTITY = 90.0
 DEFAULT_COVERAGE = 90.0
 LOCUS_SEP = "__"
+# Loci per BLAST DB batch. Big enough that the per-batch BLAST call has
+# meaningful work; small enough that -max_target_seqs comfortably covers
+# 1 hit per locus × ~50 alleles avg per locus = 5000 hits per batch.
+BATCH_SIZE = 100
+MAX_HITS_PER_BATCH = 8000
 
 
-def build_concat_db(scheme: Scheme, db_root: Path | None = None) -> Path:
-    """Concatenate all locus FASTAs into a single multi-FASTA and BLAST-index it."""
+def _write_locus_batch(scheme: Scheme, batch_loci: list[str], fa_path: Path) -> None:
+    """Concatenate a chunk of locus FASTAs with rewritten headers (locus__allele)."""
+    with fa_path.open("w") as out:
+        for locus in batch_loci:
+            fa = scheme.locus_fasta(locus)
+            if not fa.exists():
+                continue
+            for line in fa.read_text().splitlines():
+                if line.startswith(">"):
+                    rest = line[1:]
+                    if "_" in rest:
+                        _, allele_part = rest.rsplit("_", 1)
+                        out.write(f">{locus}{LOCUS_SEP}{allele_part}\n")
+                    else:
+                        out.write(f">{locus}{LOCUS_SEP}{rest}\n")
+                else:
+                    out.write(line + "\n")
+
+
+def build_concat_db(scheme: Scheme, db_root: Path | None = None,
+                    batch_size: int = BATCH_SIZE) -> list[Path]:
+    """Build BATCH-SIZED BLAST databases.
+
+    Returns the list of batch FASTA paths (the corresponding BLAST DBs live
+    next to them, indexed by makeblastdb). Splitting the scheme into 100-locus
+    chunks keeps BLAST's per-call memory + output bounded: one big DB with
+    millions of alleles makes -max_target_seqs saturate on a single
+    high-diversity locus, and removes the cap means BLAST allocates GBs of
+    state. A handful of small batches is far easier on memory and finishes
+    in similar wall-clock time.
+    """
     db_root = db_root or (scheme.root / "blast_db")
     db_root.mkdir(parents=True, exist_ok=True)
-    concat = db_root / "concat.fasta"
 
-    if concat.exists() and concat.with_suffix(".fasta.nhr").exists():
-        return concat.with_suffix(".fasta")
+    loci = scheme.loci
+    expected = [db_root / f"batch_{i:04d}.fasta"
+                for i in range((len(loci) + batch_size - 1) // batch_size)]
 
-    if not concat.exists() or concat.stat().st_mtime < scheme.manifest_path.stat().st_mtime:
-        log.info("Building concatenated FASTA for %s (%d loci)…", scheme.name, len(scheme.loci))
-        with concat.open("w") as out:
-            for locus in scheme.loci:
-                fa = scheme.locus_fasta(locus)
-                if not fa.exists():
-                    log.warning("Missing locus FASTA: %s", locus)
-                    continue
-                for line in fa.read_text().splitlines():
-                    if line.startswith(">"):
-                        # ">abcZ_1" -> ">abcZ__1"
-                        rest = line[1:]
-                        if "_" in rest:
-                            loc_part, allele_part = rest.rsplit("_", 1)
-                            out.write(f">{locus}{LOCUS_SEP}{allele_part}\n")
-                        else:
-                            out.write(f">{locus}{LOCUS_SEP}{rest}\n")
-                    else:
-                        out.write(line + "\n")
+    # If all expected DBs already exist + are fresh, reuse.
+    if expected:
+        first_nhr = Path(str(expected[0]) + ".nhr")
+        last_nhr = Path(str(expected[-1]) + ".nhr")
+        manifest_mtime = scheme.manifest_path.stat().st_mtime
+        if (first_nhr.exists() and last_nhr.exists()
+                and first_nhr.stat().st_mtime >= manifest_mtime):
+            return expected
 
-    out_prefix = db_root / "concat.fasta"
-    if not (out_prefix.with_suffix(".fasta.nhr").exists() or
-            Path(str(out_prefix) + ".nhr").exists()):
+    log.info("Building %d BLAST DB batch(es) of %d loci each for %s…",
+             len(expected), batch_size, scheme.name)
+    out_paths: list[Path] = []
+    for i, fa_path in enumerate(expected):
+        start = i * batch_size
+        batch = loci[start:start + batch_size]
+        _write_locus_batch(scheme, batch, fa_path)
         subprocess.run(
-            ["makeblastdb", "-in", str(concat), "-dbtype", "nucl",
-             "-out", str(concat), "-parse_seqids"],
+            ["makeblastdb", "-in", str(fa_path), "-dbtype", "nucl",
+             "-out", str(fa_path)],
             check=True, capture_output=True,
         )
-    return concat
+        out_paths.append(fa_path)
+    return out_paths
 
 
-def _blast_concat(assembly: Path, db: Path, threads: int) -> list[dict]:
-    """BLAST the genome against the concatenated allele DB.
-
-    For schemes where some loci have thousands of allele variants, BLAST's
-    `-max_target_seqs` can be saturated by hits from a single high-diversity
-    locus, hiding all the others. We work around that with a per-locus
-    streaming aggregator: keep only the best hit observed so far per locus,
-    so we never need to buffer 100k+ rows.
-    """
+def _blast_batch(assembly: Path, db: Path, threads: int) -> dict[str, dict]:
+    """BLAST one batch DB; return {locus: best-hit} (streaming aggregate)."""
     fmt = "6 qseqid sseqid pident length qstart qend sstart send evalue bitscore slen"
     cmd = ["blastn", "-query", str(assembly), "-db", str(db),
            "-outfmt", fmt, "-num_threads", str(threads),
-           # Effectively no cap: 2.7M alleles in the DB, we want every locus
-           # represented at least once.
-           "-max_target_seqs", "5000000",
+           "-max_target_seqs", str(MAX_HITS_PER_BATCH),
            "-evalue", "1e-30", "-perc_identity", "85"]
     proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
     best: dict[str, dict] = {}
@@ -103,7 +122,7 @@ def _blast_concat(assembly: Path, db: Path, threads: int) -> list[dict]:
                 "pident": float(c[2]), "length": int(c[3]),
                 "bitscore": bitscore, "slen": int(c[10]),
             }
-    return list(best.values())
+    return best
 
 
 def call_cgmlst(
@@ -116,16 +135,17 @@ def call_cgmlst(
     if threads == 0:
         threads = max(1, mp.cpu_count() // 2)
 
-    db = build_concat_db(scheme)
+    batches = build_concat_db(scheme)
 
     sample = assembly.stem.replace(".fna", "").replace(".fasta", "").replace(".fa", "")
     result = MLSTResult(sample=sample, scheme=scheme.name, st=None)
 
-    # _blast_concat already returns the best hit per locus.
-    all_hits = _blast_concat(assembly, db, threads=threads)
+    # Run BLAST against each batch DB sequentially; merge best hits per locus.
     by_locus: dict[str, list[dict]] = defaultdict(list)
-    for h in all_hits:
-        by_locus[h["locus"]].append(h)
+    for batch_db in batches:
+        best = _blast_batch(assembly, batch_db, threads=threads)
+        for locus, hit in best.items():
+            by_locus[locus].append(hit)
 
     for locus in scheme.loci:
         hits = by_locus.get(locus, [])
