@@ -9,6 +9,7 @@
 <script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-svg@0.4.0/cytoscape-svg.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -95,10 +96,15 @@
         <select id="color-field"><option value="cluster_id">cluster_id</option><option value="st">ST</option></select>
       </label>
       <label class="field">
+        <span>Name clusters by</span>
+        <select id="cluster-name-field"><option value="">(default: Cluster 1, 2, …)</option></select>
+      </label>
+      <label class="field">
         <span>Cluster halo distance</span>
         <input id="cluster-threshold" type="range" min="0" max="200" value="0" />
         <div class="row"><span class="muted small">≤ alleles apart → one cluster</span><span id="cluster-threshold-val">0</span></div>
       </label>
+      <label class="check"><input type="checkbox" id="show-nontree" /> Show non-tree close connections (red dashed)</label>
       <label class="field">
         <span>Edge label threshold</span>
         <input id="threshold" type="range" min="0" max="100" value="100" />
@@ -108,29 +114,74 @@
       <button id="relax-btn" class="ghost">Relax layout</button>
       <button id="fit-btn" class="ghost">Fit to screen</button>
       <button id="export-png" class="ghost">Export PNG</button>
+      <button id="export-svg" class="ghost">Export SVG</button>
     </section>
 
     <section class="panel">
       <h2>7 · Scheme catalog</h2>
       <div id="catalog-list"></div>
+      <button id="discover-btn" class="ghost" style="margin-top:8px;width:100%">
+        Browse all PubMLST schemes…
+      </button>
     </section>
   </aside>
 
   <section class="viewport">
-    <div id="cy"></div>
-    <div id="legend" class="legend hidden"></div>
-    <div id="empty-state" class="empty-state">
-      <h2>Welcome</h2>
-      <ol>
-        <li>Enter a folder containing <code>.fasta</code> assemblies (optionally with paired-end <code>_R1_/_R2_</code> FASTQs).</li>
-        <li>Pick an MLST or cgMLST scheme — or pull a new one from the catalog.</li>
-        <li>Click <b>Analyze</b>.</li>
-        <li>Upload a metadata CSV to color the tree by any field. Adjust the cluster halo distance to highlight outbreak clusters.</li>
-      </ol>
-      <p class="muted small">Tip · drag nodes to re-arrange. Right-drag to pan. Scroll to zoom.</p>
+    <nav class="tabs">
+      <button class="tab active" data-tab="tree">Tree</button>
+      <button class="tab" data-tab="table">Comparison Table</button>
+      <button class="tab" data-tab="stats">Statistics</button>
+    </nav>
+
+    <div id="tab-tree" class="tab-pane active">
+      <div id="cy"></div>
+      <div id="legend" class="legend hidden"></div>
+      <div id="empty-state" class="empty-state">
+        <h2>Welcome</h2>
+        <ol>
+          <li>Click <b>Browse</b> and pick a folder of <code>.fasta</code> assemblies.</li>
+          <li>Pick an MLST or cgMLST scheme — or build one from a reference (<code>schemes build-adhoc</code>).</li>
+          <li>Click <b>Analyze</b>.</li>
+          <li>Upload a metadata CSV to color the tree. Adjust the cluster halo distance to highlight outbreak clusters.</li>
+        </ol>
+        <p class="muted small">Re-running on the same folder is incremental — only new isolates get typed.</p>
+      </div>
+    </div>
+
+    <div id="tab-table" class="tab-pane">
+      <div id="comparison-table" class="comparison-table"></div>
+    </div>
+
+    <div id="tab-stats" class="tab-pane">
+      <div id="stats-content" class="stats-content"></div>
     </div>
   </section>
 </main>
+
+<div id="discover-modal" class="modal hidden">
+  <div class="modal-card" style="width:min(820px,94vw);max-height:84vh">
+    <header>
+      <h2>All available schemes</h2>
+      <button id="discover-close" class="ghost mini">✕</button>
+    </header>
+    <div class="modal-body">
+      <div class="discover-controls">
+        <input id="discover-search" type="text" placeholder="Search organism (e.g. listeria, klebsiella, aureus)…" autofocus />
+        <div class="discover-filter-row">
+          <label><input type="checkbox" id="filter-mlst" checked /> MLST</label>
+          <label><input type="checkbox" id="filter-cgmlst" checked /> cgMLST</label>
+          <label><input type="checkbox" id="filter-accessory" /> Accessory / virulence / resistance</label>
+          <button id="discover-refresh" class="ghost mini" style="margin-left:auto">⟳ Refresh</button>
+        </div>
+      </div>
+      <div id="discover-status" class="muted small" style="margin:8px 0"></div>
+      <table id="discover-table" class="discover-table">
+        <thead><tr><th>Organism</th><th>Scheme</th><th>Kind</th><th>Source</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <div id="browse-modal" class="modal hidden">
   <div class="modal-card">

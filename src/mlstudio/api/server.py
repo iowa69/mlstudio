@@ -30,7 +30,10 @@ from mlstudio.io.scanner import Sample, scan
 from mlstudio.profiles.distance import hamming_matrix
 from mlstudio.profiles.mst import build_mst, mst_to_cytoscape
 from mlstudio.schemes import Scheme
-from mlstudio.schemes.bigsdb import REGISTRY, list_local, pull_scheme
+from mlstudio.schemes.bigsdb import (
+    REGISTRY, BigsdbClient, SchemeRef, _classify_scheme,
+    cache_root, discover_remote_schemes, list_local, pull_scheme,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +63,7 @@ class Job:
         self.scheme_loci: list[str] = []
         self.scheme_cluster_threshold: int = 0
         self.distance_policy: str = "pairwise_complete"
+        self.distance_matrix = None  # type: ignore[var-annotated]
         self.error: str | None = None
         self.subscribers: list[asyncio.Queue] = []
 
@@ -203,12 +207,17 @@ async def _run_job(job: Job) -> None:
             # Collapse identical genotypes into one representative node.
             merged, members_by_rep = _merge_identical(profiles)
             dm = hamming_matrix(merged, policy="pairwise_complete")
+            job.distance_matrix = dm  # kept for non-tree edge requests
             mst = build_mst(dm)
             st_by_sample = {r["sample"]: r["st"] for r in job.results}
+            # Default non-tree connection cutoff: 2× cluster threshold (or 10).
+            nt_cut = max(10, scheme.cluster_threshold * 2)
+            nt_pairs = dm.pairs_under(nt_cut)
             job.mst = mst_to_cytoscape(
                 mst, job.metadata or None, st_by_sample,
                 cluster_threshold=scheme.cluster_threshold,
                 members_by_rep=members_by_rep,
+                non_tree_pairs=nt_pairs,
             )
         else:
             sname = next(iter(profiles.keys()))
@@ -270,6 +279,50 @@ def create_app() -> FastAPI:
     async def schemes_pull(key: str) -> dict[str, Any]:
         scheme = pull_scheme(key)
         return {"ok": True, "name": scheme.name, "loci": scheme.loci}
+
+    # ---- discoverable scheme browser ------------------------------------
+    _discovery_cache: dict[str, Any] = {}
+
+    @app.get("/api/schemes/discover")
+    async def schemes_discover(refresh: bool = False) -> dict[str, Any]:
+        """Live-discover every scheme on PubMLST.org and BIGSdb-Pasteur.
+
+        Cached for the lifetime of the process; pass refresh=true to bust.
+        """
+        if refresh or "schemes" not in _discovery_cache:
+            loop = asyncio.get_running_loop()
+            schemes = await loop.run_in_executor(None, discover_remote_schemes)
+            _discovery_cache["schemes"] = schemes
+        return {"schemes": _discovery_cache["schemes"]}
+
+    @app.post("/api/schemes/discover/pull")
+    async def schemes_pull_discovered(payload: dict[str, Any]) -> dict[str, Any]:
+        """Pull a scheme not already in the static REGISTRY by giving us its
+        host / database / scheme_id / organism. Stored in the local cache and
+        auto-appears in the catalog."""
+        host = payload["host"].rstrip("/")
+        # Strip /api if present (BIGSdb-Pasteur uses /api/db, our client adds /api back)
+        if host.endswith("/api"):
+            host = host[:-4]
+        database = payload["database"]
+        scheme_id = int(payload["scheme_id"])
+        organism = payload["organism"]
+        description = payload.get("description", "")
+        kind = payload.get("kind") or _classify_scheme(description, database)
+        # Construct a key
+        org_slug = organism.split()[0][0].lower() + (organism.split()[1] if len(organism.split())>1 else "spp").lower()
+        key = f"{org_slug}_{kind}_{scheme_id}".replace(" ", "_")
+        # Register on the fly
+        REGISTRY[key] = SchemeRef(
+            organism=organism, host=host, database=database,
+            scheme_id=scheme_id, scheme_label=description or kind.upper(),
+            kind=kind,
+            cluster_threshold=5 if kind == "cgmlst" else 0,
+        )
+        scheme = await asyncio.get_running_loop().run_in_executor(
+            None, pull_scheme, key, False, None, 8,
+        )
+        return {"ok": True, "key": key, "name": scheme.name, "loci": len(scheme.loci)}
 
     # ---- scanning -------------------------------------------------------
     @app.get("/api/scan")
@@ -345,15 +398,60 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Not enough samples for MST recompute")
         merged, members_by_rep = _merge_identical(job.profiles)
         dm = hamming_matrix(merged, policy=policy)
+        job.distance_matrix = dm
         mst = build_mst(dm)
         st_by_sample = {r["sample"]: r["st"] for r in job.results}
+        nt_cut = max(10, job.scheme_cluster_threshold * 2)
+        nt_pairs = dm.pairs_under(nt_cut)
         job.mst = mst_to_cytoscape(
             mst, job.metadata or None, st_by_sample,
             cluster_threshold=job.scheme_cluster_threshold,
             members_by_rep=members_by_rep,
+            non_tree_pairs=nt_pairs,
         )
         job.distance_policy = policy
         return {"ok": True, "policy": policy, "mst": job.mst}
+
+    @app.get("/api/jobs/{job_id}/stats")
+    async def job_stats(job_id: str) -> dict[str, Any]:
+        """Return distance-distribution + cluster summary for the Statistics tab."""
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, "Unknown job")
+        if job.distance_matrix is None:
+            return {"empty": True}
+        mat = job.distance_matrix.matrix
+        n = job.distance_matrix.n
+        if n < 2:
+            return {"n_samples": n}
+        upper = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                upper.append(int(mat[i, j]))
+        upper.sort()
+        # LNF/INF/EXC totals from job.results
+        exc = inf = lnf = 0
+        for r in job.results:
+            for c in r["calls"].values():
+                if c["flag"] == "EXC": exc += 1
+                elif c["flag"] == "INF": inf += 1
+                elif c["flag"] == "LNF": lnf += 1
+        nloci = len(job.scheme_loci)
+        return {
+            "n_samples": n,
+            "n_loci": nloci,
+            "exc": exc, "inf": inf, "lnf": lnf,
+            "mean_lnf_per_sample": lnf / max(1, n),
+            "missing_pct": 100.0 * lnf / max(1, exc + inf + lnf),
+            "distance": {
+                "min": upper[0],
+                "p25": upper[len(upper) // 4],
+                "median": upper[len(upper) // 2],
+                "p75": upper[3 * len(upper) // 4],
+                "max": upper[-1],
+            },
+            "histogram": _histogram(upper, bins=30),
+        }
 
     @app.get("/api/jobs/{job_id}")
     async def job_status(job_id: str) -> dict[str, Any]:
@@ -434,6 +532,21 @@ def create_app() -> FastAPI:
             return FileResponse(frontend_dir / "index.html")
 
     return app
+
+
+def _histogram(vals: list[int], bins: int = 30) -> dict[str, list[int]]:
+    if not vals:
+        return {"bins": [], "counts": []}
+    lo, hi = vals[0], vals[-1]
+    if lo == hi:
+        return {"bins": [lo], "counts": [len(vals)]}
+    width = max(1, (hi - lo + bins - 1) // bins)
+    edges = [lo + i * width for i in range(bins + 1)]
+    counts = [0] * bins
+    for v in vals:
+        idx = min((v - lo) // width, bins - 1)
+        counts[idx] += 1
+    return {"bins": edges, "counts": counts}
 
 
 def _sample_cache_key(sample: Sample, scheme: Scheme) -> str:

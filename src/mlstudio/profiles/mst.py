@@ -31,6 +31,7 @@ def mst_to_cytoscape(
     st_by_sample: dict[str, str | None] | None = None,
     cluster_threshold: int = 0,
     members_by_rep: dict[str, list[str]] | None = None,
+    non_tree_pairs: list[tuple[str, str, int]] | None = None,
 ) -> dict[str, Any]:
     """Serialize an MST to Cytoscape.js JSON.
 
@@ -88,6 +89,24 @@ def mst_to_cytoscape(
                 "target": v,
                 "weight": int(attrs.get("weight", 0)),
                 "label": str(attrs.get("weight", 0)),
+                "kind": "tree",
             }
+        })
+    # Non-tree close pairs — edges that are below the user threshold but not in
+    # the MST. Render as red dashed lines client-side.
+    mst_edges = {tuple(sorted(e)) for e in mst.edges}
+    for u, v, w in (non_tree_pairs or []):
+        key = tuple(sorted([u, v]))
+        if key in mst_edges:
+            continue
+        elements.append({
+            "data": {
+                "id": f"nt_{u}__{v}",
+                "source": u, "target": v,
+                "weight": int(w),
+                "label": str(int(w)),
+                "kind": "nontree",
+            },
+            "classes": "nontree",
         })
     return {"elements": elements}

@@ -208,6 +208,67 @@ def pull_scheme(key: str, force: bool = False, cache_dir: Path | None = None,
     return Scheme.from_dir(root)
 
 
+async def _discover_one(client: httpx.AsyncClient, host: str) -> list[dict]:
+    """Walk a BIGSdb host: list groups → seqdef DBs → schemes."""
+    out: list[dict] = []
+    try:
+        rdb = await client.get(f"{host}/db", timeout=30.0)
+        rdb.raise_for_status()
+        groups = rdb.json()
+    except Exception as e:
+        log.warning("discover %s: %s", host, e)
+        return out
+    for grp in groups:
+        organism = grp.get("description", "").strip()
+        for db in grp.get("databases", []):
+            name = db.get("name", "")
+            if not name.endswith("_seqdef"):
+                continue  # only sequence-definition DBs
+            try:
+                rs = await client.get(f"{host}/db/{name}/schemes", timeout=30.0)
+                rs.raise_for_status()
+                schemes = rs.json().get("schemes", [])
+            except Exception:
+                continue
+            for s in schemes:
+                desc = s.get("description", "").strip()
+                sid = int(s["scheme"].rsplit("/", 1)[-1])
+                kind = _classify_scheme(desc, name)
+                out.append({
+                    "organism": organism, "host": host,
+                    "database": name, "scheme_id": sid,
+                    "description": desc, "kind": kind,
+                })
+    return out
+
+
+def _classify_scheme(description: str, db: str) -> str:
+    d = description.lower()
+    if "cgmlst" in d:
+        return "cgmlst"
+    if d == "mlst" or "mlst" in d and "cgmlst" not in d and "core" not in d:
+        return "mlst"
+    if "virulence" in d or "resistance" in d or "accessory" in d:
+        return "accessory"
+    return "other"
+
+
+def discover_remote_schemes(
+    hosts: tuple[str, ...] = (
+        "https://rest.pubmlst.org",
+        "https://bigsdb.pasteur.fr/api",
+    ),
+) -> list[dict]:
+    """One-shot discovery of every scheme exposed by the given BIGSdb hosts."""
+    async def _go() -> list[dict]:
+        results: list[dict] = []
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            for host in hosts:
+                results.extend(await _discover_one(client, host))
+        return results
+    return asyncio.run(_go())
+
+
 def list_local(cache_dir: Path | None = None) -> list[Scheme]:
     """Return all locally-cached schemes."""
     root = cache_dir or cache_root()

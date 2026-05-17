@@ -101,6 +101,113 @@ $('scheme-select').addEventListener('change', schemeChanged);
 
 // ---- Scan ------------------------------------------------------------------
 
+// ---- Scheme discovery (searchable catalog) ------------------------------
+
+let discoverData = null;
+
+async function openDiscover() {
+  $('discover-modal').classList.remove('hidden');
+  if (discoverData) return renderDiscover();
+  $('discover-status').textContent = 'Querying PubMLST.org and BIGSdb-Pasteur (~10 s)…';
+  try {
+    const r = await api('/schemes/discover');
+    discoverData = r.schemes;
+    renderDiscover();
+  } catch (e) {
+    $('discover-status').textContent = 'Error: ' + e.message;
+  }
+}
+
+function renderDiscover() {
+  if (!discoverData) return;
+  const q = $('discover-search').value.toLowerCase().trim();
+  const wantMlst = $('filter-mlst').checked;
+  const wantCg = $('filter-cgmlst').checked;
+  const wantAcc = $('filter-accessory').checked;
+
+  const rows = discoverData.filter(s => {
+    if (q) {
+      const haystack = (s.organism + ' ' + s.description + ' ' + s.database).toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    if (s.kind === 'mlst' && !wantMlst) return false;
+    if (s.kind === 'cgmlst' && !wantCg) return false;
+    if (s.kind === 'accessory' && !wantAcc) return false;
+    if (s.kind === 'other' && !wantAcc) return false;
+    return true;
+  });
+  rows.sort((a, b) => a.organism.localeCompare(b.organism) ||
+                       a.kind.localeCompare(b.kind));
+
+  $('discover-status').textContent =
+    `${rows.length} scheme${rows.length === 1 ? '' : 's'} match — total catalogued ${discoverData.length}`;
+
+  const tbody = $('discover-table').querySelector('tbody');
+  tbody.innerHTML = rows.slice(0, 250).map(s => {
+    // Derive species from database name (e.g. pubmlst_saureus_seqdef -> "saureus")
+    const m = s.database.match(/^pubmlst_([^_]+)_seqdef$/);
+    const species = m ? m[1] : '';
+    return `
+    <tr>
+      <td>
+        <b>${escapeHtml(s.organism)}</b>
+        ${species ? `<div class="muted small">db: <code>${species}</code></div>` : ''}
+      </td>
+      <td>${escapeHtml(s.description)}</td>
+      <td><span class="kind ${s.kind}">${s.kind}</span></td>
+      <td class="muted">${s.host.replace(/^https?:\/\//, '')}</td>
+      <td><button class="primary pull-btn"
+            data-host="${s.host}" data-db="${s.database}"
+            data-sid="${s.scheme_id}" data-org="${escapeHtml(s.organism)}"
+            data-desc="${escapeHtml(s.description)}" data-kind="${s.kind}">Pull</button></td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('.pull-btn').forEach(b => {
+    b.addEventListener('click', async (e) => {
+      const btn = e.target;
+      btn.textContent = '…'; btn.disabled = true;
+      try {
+        await api('/schemes/discover/pull', {
+          method: 'POST',
+          body: JSON.stringify({
+            host: btn.dataset.host, database: btn.dataset.db,
+            scheme_id: parseInt(btn.dataset.sid),
+            organism: btn.dataset.org, description: btn.dataset.desc,
+            kind: btn.dataset.kind,
+          }),
+        });
+        btn.textContent = '✓'; btn.style.background = '#10b981';
+        loadCatalog();
+      } catch (err) {
+        btn.textContent = 'fail'; alert(err.message);
+      }
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+$('discover-btn').addEventListener('click', openDiscover);
+$('discover-close').addEventListener('click', () => $('discover-modal').classList.add('hidden'));
+$('discover-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'discover-modal') $('discover-modal').classList.add('hidden');
+});
+$('discover-search').addEventListener('input', () => renderDiscover());
+$('filter-mlst').addEventListener('change', () => renderDiscover());
+$('filter-cgmlst').addEventListener('change', () => renderDiscover());
+$('filter-accessory').addEventListener('change', () => renderDiscover());
+$('discover-refresh').addEventListener('click', async () => {
+  $('discover-status').textContent = 'Re-fetching…';
+  try {
+    const r = await api('/schemes/discover?refresh=true');
+    discoverData = r.schemes;
+    renderDiscover();
+  } catch (e) { $('discover-status').textContent = 'Error: ' + e.message; }
+});
+
 // ---- Folder browser ------------------------------------------------------
 
 let browseCwd = null;
@@ -229,8 +336,8 @@ function subscribe(jobId) {
       const anySt = nodes.some(n => n.data.st);
       state.metaFields = anySt ? ['st', 'cluster_id'] : ['cluster_id', 'st'];
       populateColorFields();
-      renderResults();
       renderMst();
+      renderComparisonTable();
     } else if (snap.status === 'error') {
       setStatus('error', snap.error || 'Error');
       $('run-btn').disabled = false;
@@ -241,50 +348,172 @@ function subscribe(jobId) {
   ws.onerror = () => setStatus('error', 'WebSocket error');
 }
 
-// ---- Results table ---------------------------------------------------------
+// ---- Tabs -----------------------------------------------------------------
 
-function renderResults() {
-  const panel = $('results-panel');
-  panel.classList.remove('hidden');
-  const thead = panel.querySelector('thead');
-  const tbody = panel.querySelector('tbody');
-  if (!state.results.length) return;
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const t = btn.dataset.tab;
+    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tab-pane').forEach(p => {
+      p.classList.toggle('active', p.id === `tab-${t}`);
+    });
+    if (t === 'table') renderComparisonTable();
+    if (t === 'stats') renderStats();
+    if (t === 'tree' && state.cy) { state.cy.resize(); state.cy.fit(null, 50); }
+  });
+});
 
+// ---- Comparison table ---------------------------------------------------
+
+let sortField = 'sample';
+let sortAsc = true;
+
+function renderComparisonTable() {
+  const root = $('comparison-table');
+  if (!state.results.length) {
+    root.innerHTML = '<p class="muted">No results yet.</p>';
+    return;
+  }
   const loci = Object.keys(state.results[0].calls);
-  const showAllLoci = loci.length <= 15;
-  const summary = showAllLoci ? loci : ['(too many loci — counts only)'];
+  const compact = loci.length > 15;
+  const colorField = $('color-field').value;
+  const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id');
 
-  thead.innerHTML = '<tr><th>Sample</th><th>ST</th>' +
-    (showAllLoci ? loci.map(l => `<th>${l}</th>`).join('') :
-      '<th>EXC</th><th>INF</th><th>LNF</th>') +
-    '<th>Notes</th></tr>';
-
-  tbody.innerHTML = state.results.map(r => {
-    let cells;
-    if (showAllLoci) {
-      cells = loci.map(l => {
-        const c = r.calls[l];
-        const flag = c.flag !== 'EXC' ? ` <span class="muted">(${c.flag})</span>` : '';
-        return `<td>${c.allele ?? '-'}${flag}</td>`;
-      }).join('');
-    } else {
-      let exc=0,inf=0,lnf=0;
-      for (const c of Object.values(r.calls)) {
-        if (c.flag === 'EXC') exc++;
-        else if (c.flag === 'INF') inf++;
-        else if (c.flag === 'LNF') lnf++;
-      }
-      cells = `<td>${exc}</td><td>${inf}</td><td>${lnf}</td>`;
+  const cols = [
+    { key: 'sample', label: 'Sample', cls: '', getter: r => r.sample },
+    { key: 'st', label: 'ST', cls: '', getter: r => r.st || '—' },
+    { key: 'cluster_id', label: 'Cluster', cls: colorField === 'cluster_id' ? 'color-key' : '', getter: r => state.clusterOf?.[r.sample] || '—' },
+  ];
+  if (compact) {
+    cols.push({ key: 'exc', label: 'EXC', cls: 'distance-key', getter: r => Object.values(r.calls).filter(c => c.flag==='EXC').length });
+    cols.push({ key: 'inf', label: 'INF', cls: 'distance-key', getter: r => Object.values(r.calls).filter(c => c.flag==='INF').length });
+    cols.push({ key: 'lnf', label: 'LNF', cls: '', getter: r => Object.values(r.calls).filter(c => c.flag==='LNF').length });
+  } else {
+    for (const l of loci) {
+      cols.push({ key: l, label: l, cls: 'distance-key',
+        getter: r => {
+          const c = r.calls[l];
+          if (!c) return '—';
+          if (c.flag === 'EXC') return c.allele || '—';
+          if (c.flag === 'INF') return `${c.allele || '?'}~`;
+          return '—';
+        }});
     }
-    return `<tr><td><b>${r.sample}</b></td><td>${r.st ?? '<span class="muted">none</span>'}</td>${cells}<td class="muted small">${r.notes.join('; ')}</td></tr>`;
-  }).join('');
+  }
+  // Metadata columns
+  for (const f of metaCols.filter(f => f !== 'st')) {
+    cols.push({ key: f, label: f, cls: colorField === f ? 'color-key' : '',
+                getter: r => state.metaBySample?.[r.sample]?.[f] || '' });
+  }
+
+  // Sort
+  const rows = [...state.results].sort((a, b) => {
+    const col = cols.find(c => c.key === sortField) || cols[0];
+    const va = col.getter(a), vb = col.getter(b);
+    const cmp = (typeof va === 'number' && typeof vb === 'number')
+      ? va - vb
+      : String(va).localeCompare(String(vb), undefined, { numeric: true });
+    return sortAsc ? cmp : -cmp;
+  });
+
+  const palette = state.currentPalette || {};
+  const html = [];
+  html.push('<table><thead><tr>');
+  for (const c of cols) {
+    const arrow = sortField === c.key ? (sortAsc ? ' ↑' : ' ↓') : '';
+    html.push(`<th class="${c.cls}" data-key="${c.key}">${c.label}${arrow}</th>`);
+  }
+  html.push('</tr></thead><tbody>');
+  for (const r of rows) {
+    html.push('<tr>');
+    for (const c of cols) {
+      let v = c.getter(r);
+      if (c.key === 'sample') {
+        const colorVal = r[colorField] !== undefined ? r[colorField] : state.metaBySample?.[r.sample]?.[colorField];
+        const swatch = palette[colorVal] ? `<span class="swatch" style="background:${palette[colorVal]}"></span>` : '';
+        v = `${swatch}<b>${v}</b>`;
+      }
+      html.push(`<td>${v ?? ''}</td>`);
+    }
+    html.push('</tr>');
+  }
+  html.push('</tbody></table>');
+  root.innerHTML = html.join('');
+
+  root.querySelectorAll('th[data-key]').forEach(th => {
+    th.addEventListener('click', () => {
+      if (sortField === th.dataset.key) sortAsc = !sortAsc;
+      else { sortField = th.dataset.key; sortAsc = true; }
+      renderComparisonTable();
+    });
+  });
 }
 
-$('toggle-results').addEventListener('click', () => {
-  const tableWrap = $('results-panel').querySelector('.table-wrap');
-  tableWrap.classList.toggle('hidden');
-  $('toggle-results').textContent = tableWrap.classList.contains('hidden') ? 'expand ▴' : 'collapse ▾';
-});
+// ---- Statistics tab -----------------------------------------------------
+
+async function renderStats() {
+  const root = $('stats-content');
+  if (!state.jobId) {
+    root.innerHTML = '<p class="muted">Run an analysis to see statistics.</p>';
+    return;
+  }
+  root.innerHTML = '<p class="muted">Loading…</p>';
+  let s;
+  try { s = await api(`/jobs/${state.jobId}/stats`); }
+  catch (e) { root.innerHTML = `<p class="muted">Error: ${e.message}</p>`; return; }
+
+  if (!s || s.empty) { root.innerHTML = '<p class="muted">No analysis loaded.</p>'; return; }
+
+  const clusters = state.clusters || [];
+  const sizes = clusters.map(c => c.members.length).sort((a,b)=>b-a);
+  const warning = (s.missing_pct || 0) > 10 ? `
+    <div class="warn-banner">
+      ${s.missing_pct.toFixed(1)}% of locus calls are missing (LNF). For cgMLST,
+      treat anything &gt; 10% with caution — the pairwise-complete distance can
+      become unreliable. Consider removing low-coverage samples.
+    </div>` : '';
+
+  const cards = [
+    ['Isolates',        s.n_samples],
+    ['Scheme loci',     s.n_loci || '—'],
+    ['EXC calls',       (s.exc || 0).toLocaleString()],
+    ['INF calls',       (s.inf || 0).toLocaleString()],
+    ['LNF (missing)',   (s.lnf || 0).toLocaleString(), `${(s.missing_pct || 0).toFixed(1)}% of total`],
+    ['Median pairwise', s.distance?.median ?? '—', `range ${s.distance?.min}–${s.distance?.max}`],
+    ['Clusters @ thr ' + (state.clusterThreshold ?? 0), clusters.length, sizes.length ? `largest: ${sizes[0]}` : ''],
+  ];
+  let cardHtml = '<div class="stat-grid">';
+  for (const [label, value, sub] of cards) {
+    cardHtml += `<div class="stat-card"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+  }
+  cardHtml += '</div>';
+
+  // Distance histogram
+  let histHtml = '';
+  const h = s.histogram;
+  if (h && h.bins && h.bins.length) {
+    const maxC = Math.max(...h.counts);
+    histHtml = '<div class="stats-section"><h3>Pairwise distance distribution</h3>';
+    for (let i = 0; i < h.counts.length; i++) {
+      const w = maxC ? (h.counts[i] / maxC * 100) : 0;
+      const lo = h.bins[i], hi = h.bins[i + 1];
+      histHtml += `<div class="hist-row"><span class="lo">${lo}–${hi}</span><span class="bar-wrap"><div class="hist-bar" style="width:${w}%"></div></span><span class="count">${h.counts[i]}</span></div>`;
+    }
+    histHtml += '</div>';
+  }
+
+  // Cluster sizes
+  let clHtml = '';
+  if (clusters.length) {
+    clHtml = '<div class="stats-section"><h3>Cluster membership</h3><table><thead><tr><th>Name</th><th>Members</th><th>Samples</th></tr></thead><tbody>';
+    for (const c of clusters) {
+      clHtml += `<tr><td><span class="swatch" style="background:${c.color}"></span><b>${c.name}</b></td><td>${c.members.length}</td><td class="muted small">${c.members.join(', ')}</td></tr>`;
+    }
+    clHtml += '</tbody></table></div>';
+  }
+
+  root.innerHTML = warning + cardHtml + histHtml + clHtml;
+}
 
 // ---- Coloring / palette ----------------------------------------------------
 
@@ -580,6 +809,18 @@ function renderMst() {
         selector: 'edge.hidden',
         style: { 'display': 'none' }
       },
+      {
+        selector: 'edge.nontree',
+        style: {
+          'line-color': '#ef4444',
+          'line-style': 'dashed',
+          'line-opacity': 0.65,
+          'width': 1.5,
+          'label': '',
+          'curve-style': 'bezier',
+          'display': $('show-nontree').checked ? 'element' : 'none',
+        }
+      },
     ],
   });
 
@@ -606,10 +847,13 @@ function applyClusters() {
   const groups = (threshold > 0) ? computeClusters(state.mst, threshold) : [];
   state.clusters = groups.map((members, i) => ({
     id: `C${i + 1}`,
-    name: `Cluster ${i + 1}`,
+    name: clusterDisplayName(`C${i + 1}`, members, i),
     members,
     color: softColor(i),
   }));
+  // Reverse map for quick lookup
+  state.clusterOf = {};
+  for (const c of state.clusters) for (const m of c.members) state.clusterOf[m] = c.name;
   if (state.cy) {
     state.cy.scratch('_clusters', state.clusters);
     redrawHulls();
@@ -853,6 +1097,7 @@ function populateColorFields() {
     sel.appendChild(opt);
   }
   if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  populateClusterNameFields();
 }
 
 $('color-field').addEventListener('change', applyColoring);
@@ -871,6 +1116,41 @@ $('show-labels').addEventListener('change', (e) => {
   if (!state.cy) return;
   state.cy.style().selector('node:childless').style('label', e.target.checked ? 'data(label)' : '').update();
 });
+
+$('show-nontree').addEventListener('change', (e) => {
+  if (!state.cy) return;
+  state.cy.style().selector('edge.nontree')
+    .style('display', e.target.checked ? 'element' : 'none').update();
+});
+
+// Cluster naming by column
+function clusterDisplayName(cluster, members, ci) {
+  const field = $('cluster-name-field').value;
+  if (!field) return `Cluster ${ci + 1}`;
+  const counts = {};
+  for (const m of members) {
+    const v = state.metaBySample?.[m]?.[field] ?? state.cy?.getElementById(m)?.data(field) ?? '';
+    counts[v] = (counts[v] || 0) + 1;
+  }
+  const top = Object.entries(counts).sort((a,b) => b[1] - a[1])[0];
+  if (!top) return `Cluster ${ci + 1}`;
+  return top[1] === members.length ? top[0] : `${top[0]} (+${members.length - top[1]})`;
+}
+
+$('cluster-name-field').addEventListener('change', () => applyClusters());
+
+function populateClusterNameFields() {
+  const sel = $('cluster-name-field');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">(default: Cluster 1, 2, …)</option>';
+  for (const f of state.metaFields || []) {
+    if (f === 'cluster_id') continue;
+    const opt = document.createElement('option');
+    opt.value = f; opt.textContent = f;
+    sel.appendChild(opt);
+  }
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
 
 $('fit-btn').addEventListener('click', () => state.cy && state.cy.fit(null, 50));
 
@@ -902,12 +1182,32 @@ $('meta-file').addEventListener('change', async (e) => {
   const r = await fetch('/api/jobs/' + state.jobId + '/metadata', { method: 'POST', body: fd });
   if (!r.ok) { alert('Metadata upload failed'); return; }
   const data = await r.json();
-  state.metaFields = ['st', ...data.fields];
+  state.metaFields = ['st', ...data.fields, 'cluster_id'];
+  // Parse CSV client-side too so we have a per-sample lookup for table + clusters
+  const text = await f.text();
+  state.metaBySample = parseMetaCsv(text);
   const fresh = await api('/jobs/' + state.jobId);
   state.mst = fresh.mst;
   populateColorFields();
   renderMst();
+  renderComparisonTable();
 });
+
+function parseMetaCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return {};
+  const sep = lines[0].includes('\t') ? '\t' : (lines[0].includes(';') ? ';' : ',');
+  const header = lines[0].split(sep);
+  const out = {};
+  for (const line of lines.slice(1)) {
+    const cols = line.split(sep);
+    if (!cols.length) continue;
+    const name = cols[0];
+    out[name] = {};
+    for (let i = 1; i < header.length; i++) out[name][header[i]] = cols[i] || '';
+  }
+  return out;
+}
 
 // ---- Export ----------------------------------------------------------------
 
@@ -918,6 +1218,20 @@ $('export-png').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = url; a.download = 'mst.png'; a.click();
   URL.revokeObjectURL(url);
+});
+
+$('export-svg').addEventListener('click', () => {
+  if (!state.cy) return;
+  try {
+    const svg = state.cy.svg ? state.cy.svg({ bg: '#ffffff', full: true, scale: 2 })
+                              : null;
+    if (!svg) { alert('SVG export extension failed to load.'); return; }
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'mst.svg'; a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert('SVG export failed: ' + e.message); }
 });
 
 // ---- Init ------------------------------------------------------------------

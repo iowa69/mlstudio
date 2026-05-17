@@ -79,8 +79,40 @@ button.mini:hover { background: var(--panel); }
 .muted { color: var(--text-muted); }
 .small { font-size: 12px; }
 
-.viewport { position: relative; background: var(--canvas); }
-#cy { width: 100%; height: 100%; }
+.viewport { position: relative; background: var(--canvas); display: flex; flex-direction: column; }
+.tabs { display: flex; background: var(--panel); border-bottom: 1px solid var(--border); padding: 0 8px; gap: 2px; }
+.tab { background: transparent; border: none; padding: 11px 18px; color: var(--text-muted); cursor: pointer; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.12s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-pane { display: none; flex: 1; position: relative; overflow: auto; }
+.tab-pane.active { display: block; }
+#tab-tree { display: block; }
+#tab-tree:not(.active) { display: none; }
+#cy { width: 100%; height: 100%; position: absolute; inset: 0; }
+
+.comparison-table { padding: 18px; }
+.comparison-table table { font-size: 12px; border-collapse: collapse; width: 100%; }
+.comparison-table th { background: var(--panel-2); padding: 7px 10px; text-align: left; font-weight: 600; color: var(--text-muted); position: sticky; top: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; }
+.comparison-table th:hover { background: #edf2f7; }
+.comparison-table th.color-key { background: #fef2f2; color: #b91c1c; }   /* red header: color-grouping column */
+.comparison-table th.distance-key { background: #f0fdf4; color: #166534; }  /* green: distance-relevant */
+.comparison-table td { padding: 7px 10px; border-bottom: 1px solid var(--panel-2); white-space: nowrap; }
+.comparison-table tr:hover td { background: rgba(59,130,246,0.04); }
+.comparison-table .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+
+.stats-content { padding: 22px; max-width: 1100px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; box-shadow: var(--shadow-sm); }
+.stat-card .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; margin-bottom: 4px; }
+.stat-card .value { font-size: 22px; font-weight: 600; color: var(--text); }
+.stat-card .sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.stats-section h3 { margin: 18px 0 10px 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.hist-bar { height: 16px; background: var(--accent); border-radius: 2px; margin: 1px 0; }
+.hist-row { display: flex; align-items: center; gap: 8px; margin: 1px 0; font-size: 11px; color: var(--text-muted); }
+.hist-row .lo { width: 60px; text-align: right; }
+.hist-row .count { width: 36px; }
+.hist-row .bar-wrap { flex: 1; }
+.warn-banner { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 10px 14px; color: #92400e; font-size: 13px; margin-bottom: 14px; }
 .empty-state {
   position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
 }
@@ -105,20 +137,7 @@ button.mini:hover { background: var(--panel); }
 .bar-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
 #progress-text { margin-top: 6px; }
 
-.results-panel {
-  position: fixed; bottom: 0; left: 340px; right: 0;
-  background: var(--panel); border-top: 1px solid var(--border);
-  max-height: 42vh; display: flex; flex-direction: column;
-  box-shadow: 0 -2px 12px rgba(15,23,42,0.05);
-}
-.results-panel.hidden { display: none; }
-.results-panel header { display: flex; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--border); align-items: center; }
-.results-panel header h2 { margin: 0; font-size: 14px; font-weight: 600; }
-.table-wrap { overflow: auto; flex: 1; }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th, td { padding: 7px 14px; text-align: left; border-bottom: 1px solid var(--panel-2); white-space: nowrap; }
-th { background: var(--panel-2); color: var(--text-muted); font-weight: 600; position: sticky; top: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
-tr:hover td { background: rgba(59,130,246,0.04); }
+/* Legacy bottom panel removed — superseded by the Comparison Table tab. */
 
 .catalog-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--panel-2); font-size: 12px; }
 .catalog-row:last-child { border-bottom: none; }
@@ -145,5 +164,15 @@ tr:hover td { background: rgba(59,130,246,0.04); }
 .browse-list li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 5px; cursor: pointer; font-size: 13px; }
 .browse-list li:hover { background: var(--panel-2); }
 .browse-list .ico { font-size: 14px; }
+
+.discover-controls { display: flex; flex-direction: column; gap: 8px; }
+.discover-controls input[type="text"] { font-size: 14px; padding: 10px 12px; }
+.discover-filter-row { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-muted); padding-bottom: 8px; border-bottom: 1px solid var(--panel-2); }
+.discover-filter-row label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.discover-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+.discover-table th { background: var(--panel-2); padding: 7px 10px; text-align: left; font-weight: 600; color: var(--text-muted); position: sticky; top: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; z-index: 1; }
+.discover-table td { padding: 6px 10px; border-bottom: 1px solid var(--panel-2); }
+.discover-table tr:hover td { background: var(--panel-2); }
+.discover-table .pull-btn { padding: 3px 9px; font-size: 11px; }
 
 .hidden { display: none !important; }

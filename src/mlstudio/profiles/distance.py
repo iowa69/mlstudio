@@ -28,6 +28,16 @@ class DistanceMatrix:
             for i in range(self.n)
         }
 
+    def pairs_under(self, threshold: int) -> list[tuple[str, str, int]]:
+        """All distinct pairs with distance ≤ threshold."""
+        out = []
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                w = int(self.matrix[i, j])
+                if w <= threshold:
+                    out.append((self.samples[i], self.samples[j], w))
+        return out
+
 
 def hamming_matrix(
     profiles: dict[str, list[str | None]],

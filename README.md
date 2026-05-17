@@ -11,23 +11,26 @@ Point it at a folder of assembled bacterial genomes, pick a scheme, and explore 
 ## Screenshots
 
 ### 1. Welcome
-![Welcome](docs/screens/01_welcome_v4.png)
+![Welcome](docs/screens/01_welcome_v5.png)
 The starting view. The sidebar walks you through five steps: pick a folder, pick a scheme, set options, run, and adjust the display.
 
 ### 2. Built-in folder browser
-![Folder browser](docs/screens/02_browse_v4.png)
+![Folder browser](docs/screens/02_browse_v5.png)
 Click **Browse…** to navigate your filesystem from inside the browser — no need to type long paths. It tells you how many FASTA files are in each folder before you commit.
 
+### 2b. Searchable scheme catalog
+![Scheme catalog](docs/screens/02b_discover_v5.png)
+**Browse all PubMLST schemes…** live-queries PubMLST.org and BIGSdb-Pasteur (812 schemes the day this screenshot was taken). Filter by MLST / cgMLST / accessory; type to search across organism, scheme description, and database name. One click pulls the scheme into your local cache.
+
 ### 3. The minimum spanning tree
-![MST](docs/screens/03_mst_v4.png)
+![MST](docs/screens/03_mst_v5.png)
 A 67-isolate *Staphylococcus aureus* cgMLST tree (1716 loci). MSTs are centroid-free by definition — MLSTudio uses an `fcose` force-directed layout where **edge length is proportional to allele distance**, so visually close isolates really are genetically close. Nodes are colored by cluster, sample labels are always visible, and a default cluster halo highlights the closest pair.
 
 ### 4. Named cluster hulls
-![Cluster halos](docs/screens/04_clusters_v4.png)
+![Cluster halos](docs/screens/04_clusters_v5.png)
 Slide the **cluster halo distance** up and outbreak-style groups appear as soft pastel hulls — labeled **Cluster 1, Cluster 2, …** — drawn on a canvas overlay so they pan and zoom with the tree. At the *S. aureus* cgMLST suggested 5-allele threshold you'll see clonal pairs only; at 24–32 you see the broader CC structure. Identical genotypes collapse into a single pie-chart node sized by member count.
 
 ### 5. Results table
-![Results table](docs/screens/05_table_v4.png)
 Per-isolate Sequence Types, per-locus allele calls, EXC/INF/LNF flags, and free-text notes. Scrollable, sortable, and exported alongside the tree.
 
 ---
@@ -35,15 +38,15 @@ Per-isolate Sequence Types, per-locus allele calls, EXC/INF/LNF flags, and free-
 ## 60-second quickstart
 
 ```bash
-# 1. Clone
+# Option A — Bioconda (recommended once the PR lands)
+conda install -c bioconda mlstudio
+mlstudio gui
+
+# Option B — from source
 git clone https://github.com/iowa69/mlstudio.git && cd mlstudio
-
-# 2. Bootstrap (creates a conda env with BLAST+, fastp, samtools, seqkit, Python deps)
-./setup.sh
-
-# 3. Activate and launch the UI
+./setup.sh           # creates the `mlstudio` conda env with all bio + Python deps
 conda activate mlstudio
-mlstudio gui          # opens http://127.0.0.1:<port>/ in your default browser
+mlstudio gui         # opens http://127.0.0.1:<port>/ in your default browser
 ```
 
 A browser window opens. From there:
