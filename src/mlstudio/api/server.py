@@ -218,10 +218,19 @@ async def _run_job(job: Job) -> None:
                         org_prefix = job.scheme_key.split("_")[0]
                         org = ORGANISM_MAP.get(org_prefix)
                         try:
+                            # Run AMR in the default thread executor (None) rather
+                            # than the shared cgmlst ProcessPoolExecutor.
+                            # run_amrfinderplus is a subprocess wrapper that
+                            # releases the GIL during subprocess.run, so threads
+                            # are sufficient — and the process executor was
+                            # silently dropping AmrResult unpickle errors,
+                            # leaving job.amr_results empty.
                             amr = await loop.run_in_executor(
-                                executor, run_amrfinderplus, sample.assembly, org,
+                                None, run_amrfinderplus, sample.assembly, org,
                                 min(4, job.threads or 4), None,
                             )
+                            log.info("AMR %s: %d hits%s", sample.name, len(amr.hits),
+                                     f" (error: {amr.error})" if amr.error else "")
                             # Use the canonical AmrHit field names verbatim so
                             # the frontend's AMR matrix can read them without
                             # mapping. Previous code shipped truncated keys
@@ -490,7 +499,13 @@ def create_app() -> FastAPI:
                 raise HTTPException(400, f"Unknown scheme: {req.scheme}")
 
         job_id = uuid.uuid4().hex[:8]
-        job = Job(job_id, folder, req.scheme, req.threads, req.use_fastp)
+        # NB: the run_amr / output_folder kwargs used to be silently dropped
+        # here, which is why ticking "Run AMR gene scan" appeared to do nothing.
+        job = Job(
+            job_id, folder, req.scheme, req.threads, req.use_fastp,
+            run_amr=req.run_amr,
+            output_folder=Path(req.output_folder).expanduser() if req.output_folder else None,
+        )
         JOBS[job_id] = job
         asyncio.create_task(_run_job(job))
         return {"job_id": job_id}
@@ -837,8 +852,18 @@ def _write_outputs(job: Job, scheme: Scheme) -> None:
 
     # AMR results if any
     if job.amr_results:
-        amr_lines = ["sample\tgene\tclass\tsubclass\tmethod\tpident\tpcov"]
+        amr_lines = ["sample\tgene_symbol\tsequence_name\telement_type\tclass\tsubclass\tmethod\tpercent_identity\tpercent_coverage"]
         for sample, hits in job.amr_results.items():
             for h in hits:
-                amr_lines.append(f"{sample}\t{h['gene']}\t{h['class']}\t{h['subclass']}\t{h['method']}\t{h['pident']}\t{h['pcov']}")
+                amr_lines.append("\t".join([
+                    sample,
+                    h.get("gene_symbol", ""),
+                    h.get("sequence_name", ""),
+                    h.get("element_type", ""),
+                    h.get("class_", ""),
+                    h.get("subclass", ""),
+                    h.get("method", ""),
+                    str(h.get("percent_identity", "")),
+                    str(h.get("percent_coverage", "")),
+                ]))
         (out / "amr.tsv").write_text("\n".join(amr_lines) + "\n")
