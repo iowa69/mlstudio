@@ -960,7 +960,12 @@ function renderMst() {
 // Cluster info is computed but rendered as canvas hulls — see drawHulls()
 function applyClusters() {
   if (!state.cy || !state.mst) return;
-  const threshold = parseInt($('cluster-threshold').value) || 0;
+  // Prefer the numeric override (uncapped) over the slider (max 50) so
+  // typing 80 in the input actually applies — the slider only caps the
+  // common case.
+  const slider = parseInt($('cluster-threshold').value) || 0;
+  const num    = parseInt($('cluster-threshold-num')?.value) || 0;
+  const threshold = Math.max(slider, num);
   state.clusterThreshold = threshold;
 
   const groups = (threshold > 0) ? computeClusters(state.mst, threshold) : [];
@@ -1044,108 +1049,102 @@ function expandHull(hull, pad) {
   });
 }
 
-// Catmull-Rom → cubic Bezier path for a closed polygon. Gives a smooth,
-// "rounded-edge" hull instead of jagged convex-hull straight segments.
-// Tension 0.5 is a good balance: rounded but still hugs the points.
-function smoothClosedPath(ctx, pts, tension = 0.5) {
-  if (pts.length < 2) return;
-  const n = pts.length;
-  ctx.beginPath();
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 0; i < n; i++) {
-    const p0 = pts[(i - 1 + n) % n];
-    const p1 = pts[i];
-    const p2 = pts[(i + 1) % n];
-    const p3 = pts[(i + 2) % n];
-    const c1x = p1[0] + (p2[0] - p0[0]) * tension / 3;
-    const c1y = p1[1] + (p2[1] - p0[1]) * tension / 3;
-    const c2x = p2[0] - (p3[0] - p1[0]) * tension / 3;
-    const c2y = p2[1] - (p3[1] - p1[1]) * tension / 3;
-    ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2[0], p2[1]);
-  }
-  ctx.closePath();
-}
-
-// Replace the old blurred-spray look with a clean, professional hull:
-// translucent fill + crisp colored border + cluster label.
-// Single-member clusters render as a soft outlined circle; doubles as a
-// rounded capsule; 3+ as a Catmull-Rom-smoothed expanded convex hull.
+// Draw a defined halo around the *nodes* and *connecting edges* that belong
+// to each cluster — i.e. the union of soft circles per member node and soft
+// strokes along member–member edges. This is the cluster shape itself, not
+// a big convex-hull bag covering the area. A crisp outline pass on top
+// gives it a "professional" feel without the convex blob look.
 function redrawHulls() {
   if (!hullCanvas || !state.cy) return;
   ensureHullCanvas();
   const ctx = hullCtx;
   ctx.clearRect(0, 0, hullCanvas.width, hullCanvas.height);
-  // Master toggle — when the user turns halos off they should disappear
-  // entirely (canvas already cleared above; just bail).
   if ($('show-halos') && !$('show-halos').checked) return;
   const clusters = state.clusters || [];
   if (!clusters.length) return;
 
   const zoom = state.cy.zoom();
-  // Padding around the cluster footprint. Bigger nodes / higher zoom → wider.
-  const baseR = (state.scale?.nodeSize || 30) * Math.max(0.6, Math.min(2, zoom)) * 0.85;
-  const pad = baseR + 14;
+  const z = Math.max(0.4, Math.min(2.2, zoom));
+  // Halo radius around each node, edge thickness along each cluster edge.
+  // Tighter than the previous version so the shape stays close to the
+  // members instead of bleeding into the whole canvas.
+  const nodeR = 16 + 7 * z;
+  const edgeW = 16 + 9 * z;
+  // Mild blur — enough to soften the seam between circle + edge strokes
+  // without the "spray can" look. Was 10+4*zoom; now ~5px constant.
+  const blurPx = 5;
 
   for (const c of clusters) {
-    const positions = c.members.map(id => {
+    const positions = {};
+    for (const id of c.members) {
       const n = state.cy.getElementById(id);
-      if (!n || n.empty()) return null;
-      const p = n.renderedPosition();
-      return [p.x, p.y];
-    }).filter(Boolean);
-    if (!positions.length) continue;
+      if (n && !n.empty()) {
+        const p = n.renderedPosition();
+        positions[id] = [p.x, p.y];
+      }
+    }
+    const pts = Object.values(positions);
+    if (!pts.length) continue;
+    const memberSet = new Set(c.members);
 
+    // ---- Pass 1: blurred translucent fill ------------------------------
+    // Draws the soft-edged shape that follows nodes + cluster edges.
     ctx.save();
-    // Layered look: translucent fill + crisp border. Soft drop-shadow gives
-    // depth without the "spray-can" blur of the previous version.
-    ctx.shadowColor = c.color;
-    ctx.shadowBlur = 8;
-    ctx.shadowOffsetY = 1;
-    ctx.fillStyle = hexWithAlpha(c.color, 0.16);
-    ctx.strokeStyle = hexWithAlpha(c.color, 0.65);
-    ctx.lineWidth = 1.8;
-    ctx.lineJoin = 'round';
+    ctx.filter = `blur(${blurPx}px)`;
+    ctx.globalAlpha = 0.42;
+    ctx.fillStyle = c.color;
+    ctx.strokeStyle = c.color;
+    ctx.lineWidth = edgeW;
+    ctx.lineCap = 'round';
+    for (const [x, y] of pts) {
+      ctx.beginPath();
+      ctx.arc(x, y, nodeR, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    if (pts.length >= 2) {
+      state.cy.edges().forEach(edge => {
+        const s = edge.source().id(), t = edge.target().id();
+        if (memberSet.has(s) && memberSet.has(t) && positions[s] && positions[t]) {
+          ctx.beginPath();
+          ctx.moveTo(positions[s][0], positions[s][1]);
+          ctx.lineTo(positions[t][0], positions[t][1]);
+          ctx.stroke();
+        }
+      });
+    }
+    ctx.restore();
 
-    if (positions.length === 1) {
-      const [x, y] = positions[0];
+    // ---- Pass 2: crisp colored outline at the same shape ---------------
+    // Slightly smaller radius so the outline rides just inside the soft
+    // wash from pass 1. Gives the halo a "defined" edge without the wash
+    // disappearing.
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = c.color;
+    for (const [x, y] of pts) {
       ctx.beginPath();
-      ctx.arc(x, y, pad, 0, 2 * Math.PI);
-      ctx.fill();
+      ctx.arc(x, y, nodeR + 2, 0, 2 * Math.PI);
       ctx.stroke();
-    } else if (positions.length === 2) {
-      // Capsule between the two member nodes.
-      const [a, b] = positions;
-      const dx = b[0] - a[0], dy = b[1] - a[1];
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len, ny = dx / len;
-      const left = [
-        [a[0] + nx * pad, a[1] + ny * pad],
-        [b[0] + nx * pad, b[1] + ny * pad],
-      ];
-      const right = [
-        [b[0] - nx * pad, b[1] - ny * pad],
-        [a[0] - nx * pad, a[1] - ny * pad],
-      ];
-      ctx.beginPath();
-      ctx.moveTo(...left[0]);
-      ctx.lineTo(...left[1]);
-      ctx.arc(b[0], b[1], pad, Math.atan2(ny, nx), Math.atan2(-ny, -nx));
-      ctx.lineTo(...right[1]);
-      ctx.arc(a[0], a[1], pad, Math.atan2(-ny, -nx), Math.atan2(ny, nx));
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    } else {
-      // 3+ members: expanded convex hull, Catmull-Rom smoothed.
-      const hull = expandHull(convexHull(positions), pad);
-      smoothClosedPath(ctx, hull, 0.6);
-      ctx.fill();
-      ctx.stroke();
+    }
+    if (pts.length >= 2) {
+      ctx.lineWidth = edgeW + 2;
+      ctx.lineCap = 'round';
+      ctx.globalAlpha = 0.18;
+      state.cy.edges().forEach(edge => {
+        const s = edge.source().id(), t = edge.target().id();
+        if (memberSet.has(s) && memberSet.has(t) && positions[s] && positions[t]) {
+          ctx.beginPath();
+          ctx.moveTo(positions[s][0], positions[s][1]);
+          ctx.lineTo(positions[t][0], positions[t][1]);
+          ctx.stroke();
+        }
+      });
     }
     ctx.restore();
   }
 
-  // Cluster labels — sharp, no blur, drawn after fills so they stay on top.
+  // ---- Pass 3: cluster labels (no blur, on top) ------------------------
   ctx.font = '600 13px -apple-system, system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -1159,8 +1158,7 @@ function redrawHulls() {
     if (!pts.length) continue;
     const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
     const topY = Math.min(...pts.map(p => p[1]));
-    const ly = topY - pad - 8;
-    // Pill background so the label is readable against any node color
+    const ly = topY - nodeR - 14;
     const text = c.name;
     const tw = ctx.measureText(text).width;
     const ph = 18, pw = tw + 14;
@@ -1198,10 +1196,19 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-$('cluster-threshold').addEventListener('input', (e) => {
-  $('cluster-threshold-val').textContent = e.target.value;
+// Two-way bind the slider (0–50 typical cgMLST range) and the numeric
+// override input (uncapped). Either side updates the other and re-applies.
+function setClusterThreshold(value, source) {
+  const v = Math.max(0, parseInt(value) || 0);
+  const slider = $('cluster-threshold');
+  const num    = $('cluster-threshold-num');
+  if (source !== 'slider') slider.value = String(Math.min(v, parseInt(slider.max)));
+  if (source !== 'number') num.value    = String(v);
+  state.clusterThreshold = v;
   applyClusters();
-});
+}
+$('cluster-threshold').addEventListener('input', (e) => setClusterThreshold(e.target.value, 'slider'));
+$('cluster-threshold-num')?.addEventListener('input', (e) => setClusterThreshold(e.target.value, 'number'));
 
 $('distance-policy').addEventListener('change', async (e) => {
   if (!state.jobId) { $('policy-status').textContent = '(no analysis loaded)'; return; }
@@ -1613,8 +1620,7 @@ async function loadProject(name) {
     state.amr_results = p.amr || {};
     state.schemeClusterThreshold = p.manifest.scheme_cluster_threshold || 0;
     state.clusterThreshold = state.schemeClusterThreshold;
-    $('cluster-threshold').value = state.schemeClusterThreshold;
-    $('cluster-threshold-val').textContent = state.schemeClusterThreshold;
+    setClusterThreshold(state.schemeClusterThreshold, 'load');
     // Rebuild metaFields from results + metadata
     const nodes = state.mst.elements.filter(e => !e.data.source);
     if (!nodes.some(n => n.data.cluster_id)) attachClusterIds(state.mst, state.clusterThreshold);

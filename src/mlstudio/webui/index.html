@@ -125,8 +125,12 @@
       </label>
       <label class="field">
         <span>Cluster halo distance</span>
-        <input id="cluster-threshold" type="range" min="0" max="200" value="0" />
-        <div class="row"><span class="muted small">≤ alleles apart → one cluster</span><span id="cluster-threshold-val">0</span></div>
+        <input id="cluster-threshold" type="range" min="0" max="50" value="0" />
+        <div class="row">
+          <span class="muted small">≤ alleles apart → one cluster</span>
+          <input id="cluster-threshold-num" type="number" min="0" step="1" value="0"
+                 class="num-inline" title="Type a higher threshold if needed (slider caps at 50)" />
+        </div>
       </label>
       <label class="check"><input type="checkbox" id="show-halos" checked /> Show cluster halos</label>
       <label class="check"><input type="checkbox" id="show-nontree" /> Show non-tree close connections (red dashed)</label>
