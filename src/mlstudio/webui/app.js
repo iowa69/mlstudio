@@ -377,6 +377,8 @@ function subscribe(jobId) {
       setStatus('done', snap.message);
       $('run-btn').disabled = false;
       $('save-project-btn').disabled = false;
+      if ($('rerun-btn'))         $('rerun-btn').disabled = false;
+      if ($('change-scheme-btn')) $('change-scheme-btn').disabled = false;
       const result = await api('/jobs/' + jobId);
       state.results = result.results;
       state.mst = result.mst;
@@ -424,10 +426,18 @@ function renderComparisonTable() {
   const root = $('comparison-table');
   if (!state.results.length) {
     root.innerHTML = '<p class="muted">No results yet.</p>';
+    if ($('table-summary')) $('table-summary').textContent = '';
     return;
   }
   const loci = Object.keys(state.results[0].calls);
-  const compact = loci.length > 15;
+  // Force-expand always shows every locus; otherwise compact for big schemes.
+  const showAll = $('show-all-loci')?.checked;
+  const compact = !showAll && loci.length > 15;
+  if ($('table-summary')) {
+    $('table-summary').textContent = compact
+      ? `${state.results.length} samples · ${loci.length} loci (showing summary; toggle for full matrix)`
+      : `${state.results.length} samples · ${loci.length} loci`;
+  }
   const colorField = $('color-field').value;
   const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id');
 
@@ -591,8 +601,23 @@ function colorFor(values) {
 }
 
 function paletteFor(elements, field) {
-  const values = elements.filter(e => !e.data.source).map(e => e.data[field]);
-  return colorFor(values);
+  const nodes = elements.filter(e => !e.data.source);
+  const values = nodes.map(e => e.data[field]);
+  const palette = colorFor(values);
+
+  // When coloring by cluster_id, singleton clusters (one isolate that's not
+  // connected to anything else under the current halo threshold) get a neutral
+  // grey — they aren't really a "cluster", so visually they shouldn't claim a
+  // palette slot. Cluster IDs reachable from ≥2 isolates keep their assigned
+  // color. This makes the default view much calmer.
+  if (field === 'cluster_id') {
+    const counts = {};
+    for (const v of values) counts[v] = (counts[v] || 0) + 1;
+    for (const k of Object.keys(palette)) {
+      if (counts[k] === 1) palette[k] = '#cbd5e1';   // tailwind slate-300
+    }
+  }
+  return palette;
 }
 
 // ---- Clustering ------------------------------------------------------------
@@ -921,8 +946,9 @@ function renderMst() {
     const d = evt.target.data();
     console.log('Node:', d);
   });
-  // Re-render hulls on every viewport change
-  state.cy.on('render pan zoom drag', () => redrawHulls());
+  // Re-render hulls + zoom readout on every viewport change
+  state.cy.on('render pan zoom drag', () => { redrawHulls(); updateZoomReadout(); });
+  updateZoomReadout();
 
   ensureHullCanvas();
   applyClusters();
@@ -1018,67 +1044,111 @@ function expandHull(hull, pad) {
   });
 }
 
+// Catmull-Rom → cubic Bezier path for a closed polygon. Gives a smooth,
+// "rounded-edge" hull instead of jagged convex-hull straight segments.
+// Tension 0.5 is a good balance: rounded but still hugs the points.
+function smoothClosedPath(ctx, pts, tension = 0.5) {
+  if (pts.length < 2) return;
+  const n = pts.length;
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const p3 = pts[(i + 2) % n];
+    const c1x = p1[0] + (p2[0] - p0[0]) * tension / 3;
+    const c1y = p1[1] + (p2[1] - p0[1]) * tension / 3;
+    const c2x = p2[0] - (p3[0] - p1[0]) * tension / 3;
+    const c2y = p2[1] - (p3[1] - p1[1]) * tension / 3;
+    ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2[0], p2[1]);
+  }
+  ctx.closePath();
+}
+
+// Replace the old blurred-spray look with a clean, professional hull:
+// translucent fill + crisp colored border + cluster label.
+// Single-member clusters render as a soft outlined circle; doubles as a
+// rounded capsule; 3+ as a Catmull-Rom-smoothed expanded convex hull.
 function redrawHulls() {
   if (!hullCanvas || !state.cy) return;
   ensureHullCanvas();
   const ctx = hullCtx;
   ctx.clearRect(0, 0, hullCanvas.width, hullCanvas.height);
+  // Master toggle — when the user turns halos off they should disappear
+  // entirely (canvas already cleared above; just bail).
+  if ($('show-halos') && !$('show-halos').checked) return;
   const clusters = state.clusters || [];
   if (!clusters.length) return;
 
   const zoom = state.cy.zoom();
-  const nodeR = 24 + 12 * Math.min(2, zoom);
-  const edgeW = 24 + 14 * Math.min(2, zoom);
-  const blurPx = 10 + 4 * Math.min(1.5, zoom);
+  // Padding around the cluster footprint. Bigger nodes / higher zoom → wider.
+  const baseR = (state.scale?.nodeSize || 30) * Math.max(0.6, Math.min(2, zoom)) * 0.85;
+  const pad = baseR + 14;
 
-  // Draw the soft halo for each cluster on its own pass so colors don't pile
-  // up to black where clusters overlap. globalAlpha keeps fills airy even
-  // after the blur convolution intensifies the centre.
   for (const c of clusters) {
-    const positions = {};
-    c.members.forEach(id => {
+    const positions = c.members.map(id => {
       const n = state.cy.getElementById(id);
-      if (n && !n.empty()) {
-        const p = n.renderedPosition();
-        positions[id] = [p.x, p.y];
-      }
-    });
-    const pts = Object.values(positions);
-    if (pts.length < 1) continue;
+      if (!n || n.empty()) return null;
+      const p = n.renderedPosition();
+      return [p.x, p.y];
+    }).filter(Boolean);
+    if (!positions.length) continue;
 
     ctx.save();
-    ctx.filter = `blur(${blurPx}px)`;
-    ctx.globalAlpha = 0.32;            // soft wash; the blur further softens it
-    ctx.fillStyle = c.color;
-    ctx.strokeStyle = c.color;
-    ctx.lineWidth = edgeW;
-    ctx.lineCap = 'round';
+    // Layered look: translucent fill + crisp border. Soft drop-shadow gives
+    // depth without the "spray-can" blur of the previous version.
+    ctx.shadowColor = c.color;
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 1;
+    ctx.fillStyle = hexWithAlpha(c.color, 0.16);
+    ctx.strokeStyle = hexWithAlpha(c.color, 0.65);
+    ctx.lineWidth = 1.8;
+    ctx.lineJoin = 'round';
 
-    // Soft circle behind each member node
-    for (const [x, y] of pts) {
+    if (positions.length === 1) {
+      const [x, y] = positions[0];
       ctx.beginPath();
-      ctx.arc(x, y, nodeR, 0, 2 * Math.PI);
+      ctx.arc(x, y, pad, 0, 2 * Math.PI);
       ctx.fill();
-    }
-    // Soft strokes along edges joining cluster members
-    if (pts.length >= 2) {
-      const memberSet = new Set(c.members);
-      state.cy.edges().forEach(edge => {
-        const s = edge.source().id(), t = edge.target().id();
-        if (memberSet.has(s) && memberSet.has(t) && positions[s] && positions[t]) {
-          ctx.beginPath();
-          ctx.moveTo(positions[s][0], positions[s][1]);
-          ctx.lineTo(positions[t][0], positions[t][1]);
-          ctx.stroke();
-        }
-      });
+      ctx.stroke();
+    } else if (positions.length === 2) {
+      // Capsule between the two member nodes.
+      const [a, b] = positions;
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      const left = [
+        [a[0] + nx * pad, a[1] + ny * pad],
+        [b[0] + nx * pad, b[1] + ny * pad],
+      ];
+      const right = [
+        [b[0] - nx * pad, b[1] - ny * pad],
+        [a[0] - nx * pad, a[1] - ny * pad],
+      ];
+      ctx.beginPath();
+      ctx.moveTo(...left[0]);
+      ctx.lineTo(...left[1]);
+      ctx.arc(b[0], b[1], pad, Math.atan2(ny, nx), Math.atan2(-ny, -nx));
+      ctx.lineTo(...right[1]);
+      ctx.arc(a[0], a[1], pad, Math.atan2(-ny, -nx), Math.atan2(ny, nx));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      // 3+ members: expanded convex hull, Catmull-Rom smoothed.
+      const hull = expandHull(convexHull(positions), pad);
+      smoothClosedPath(ctx, hull, 0.6);
+      ctx.fill();
+      ctx.stroke();
     }
     ctx.restore();
   }
 
-  // Phase 2: sharp text labels (no blur)
-  ctx.font = 'bold 14px -apple-system, system-ui, sans-serif';
+  // Cluster labels — sharp, no blur, drawn after fills so they stay on top.
+  ctx.font = '600 13px -apple-system, system-ui, sans-serif';
   ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   for (const c of clusters) {
     const pts = c.members.map(id => {
       const n = state.cy.getElementById(id);
@@ -1086,13 +1156,46 @@ function redrawHulls() {
       const p = n.renderedPosition();
       return [p.x, p.y];
     }).filter(Boolean);
-    if (pts.length < 1) continue;
+    if (!pts.length) continue;
     const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
     const topY = Math.min(...pts.map(p => p[1]));
-    // Solid color label
-    ctx.fillStyle = '#1c2026';
-    ctx.fillText(c.name, cx, topY - nodeR - 12);
+    const ly = topY - pad - 8;
+    // Pill background so the label is readable against any node color
+    const text = c.name;
+    const tw = ctx.measureText(text).width;
+    const ph = 18, pw = tw + 14;
+    ctx.fillStyle = hexWithAlpha(c.color, 0.92);
+    roundRect(ctx, cx - pw / 2, ly - ph / 2, pw, ph, 9);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, cx, ly);
   }
+}
+
+function hexWithAlpha(hex, a) {
+  // Accept #rgb, #rrggbb, or rgb()/rgba() strings; return rgba(...).
+  if (hex.startsWith('rgb')) {
+    return hex.replace(/rgba?\(([^)]+)\)/, (_, body) => {
+      const parts = body.split(',').map(s => s.trim()).slice(0, 3);
+      return `rgba(${parts.join(',')},${a})`;
+    });
+  }
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
 }
 
 $('cluster-threshold').addEventListener('input', (e) => {
@@ -1218,6 +1321,11 @@ $('show-nontree').addEventListener('change', (e) => {
     .style('display', e.target.checked ? 'element' : 'none').update();
 });
 
+// Cluster-halo master toggle — clears the overlay immediately when turned
+// off (otherwise the canvas retains the last paint until the next viewport
+// change).
+$('show-halos')?.addEventListener('change', () => redrawHulls());
+
 // Cluster naming by column
 function clusterDisplayName(cluster, members, ci) {
   const field = $('cluster-name-field').value;
@@ -1248,6 +1356,103 @@ function populateClusterNameFields() {
 }
 
 $('fit-btn').addEventListener('click', () => state.cy && state.cy.fit(null, 50));
+
+// ---- Zoom dial -------------------------------------------------------------
+// Floating zoom widget overlaid on the canvas. Steps by a fixed factor and
+// updates the percent readout live (also from wheel-driven zoom).
+function updateZoomReadout() {
+  const z = state.cy?.zoom() || 1;
+  const el = $('zoom-reset');
+  if (el) el.textContent = `${Math.round(z * 100)}%`;
+}
+function zoomBy(factor) {
+  if (!state.cy) return;
+  const z0 = state.cy.zoom();
+  const c = { x: state.cy.width() / 2, y: state.cy.height() / 2 };
+  state.cy.zoom({ level: z0 * factor, renderedPosition: c });
+  updateZoomReadout();
+  redrawHulls();
+}
+$('zoom-in')?.addEventListener('click',  () => zoomBy(1.2));
+$('zoom-out')?.addEventListener('click', () => zoomBy(1 / 1.2));
+$('zoom-reset')?.addEventListener('click', () => {
+  if (!state.cy) return;
+  state.cy.fit(null, 50);
+  updateZoomReadout();
+  redrawHulls();
+});
+
+// ---- Sticky-run extra actions ----------------------------------------------
+// Re-run = same parameters, fresh analysis (useful after adding isolates).
+// Change scheme = swap to a different scheme and re-run.
+// Reset = wipe results, return to welcome screen.
+function rerunAnalysis() {
+  if (!$('folder-input').value.trim() || !$('scheme-select').value) return;
+  $('run-btn').click();
+}
+$('rerun-btn')?.addEventListener('click', rerunAnalysis);
+$('change-scheme-btn')?.addEventListener('click', () => {
+  const sel = $('scheme-select');
+  sel.focus();
+  // Visual cue: pulse the dropdown so the user knows to pick a new one.
+  sel.classList.add('attention');
+  setTimeout(() => sel.classList.remove('attention'), 1200);
+});
+$('reset-btn')?.addEventListener('click', () => {
+  if (state.cy) { state.cy.destroy(); state.cy = null; }
+  if (hullCtx) hullCtx.clearRect(0, 0, hullCanvas.width, hullCanvas.height);
+  state.jobId = null;
+  state.results = [];
+  state.mst = null;
+  state.clusters = [];
+  $('empty-state').classList.remove('hidden');
+  $('legend').classList.add('hidden');
+  $('comparison-table').innerHTML = '';
+  $('stats-content').innerHTML = '';
+  $('save-project-btn').disabled = true;
+  $('rerun-btn').disabled = true;
+  $('change-scheme-btn').disabled = true;
+  $('job-progress').classList.add('hidden');
+  setStatus('idle', 'Idle');
+});
+
+// ---- TSV export of the comparison table ------------------------------------
+// Always exports the full per-locus matrix regardless of compact-view state,
+// so the "Show every locus" toggle only affects on-screen rendering.
+$('export-tsv-btn')?.addEventListener('click', () => {
+  if (!state.results.length) { alert('Run an analysis first.'); return; }
+  const loci = Object.keys(state.results[0].calls || {});
+  const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id' && f !== 'st');
+  const header = ['sample', 'st', 'cluster_id', 'exc', 'inf', 'lnf', 'notes', ...metaCols, ...loci];
+  const rows = [header.join('\t')];
+  for (const r of state.results) {
+    const calls = r.calls || {};
+    const exc = Object.values(calls).filter(c => c.flag === 'EXC').length;
+    const inf = Object.values(calls).filter(c => c.flag === 'INF').length;
+    const lnf = Object.values(calls).filter(c => c.flag === 'LNF').length;
+    const cluster = state.clusterOf?.[r.sample] || '';
+    const meta = metaCols.map(f => state.metaBySample?.[r.sample]?.[f] ?? '');
+    const alleles = loci.map(l => {
+      const c = calls[l];
+      if (!c) return '';
+      if (c.flag === 'EXC') return c.allele ?? '';
+      if (c.flag === 'INF') return (c.allele ?? '?') + '~';
+      return '';   // LNF / missing
+    });
+    rows.push([r.sample, r.st ?? '', cluster, exc, inf, lnf,
+               (r.notes || []).join(' | '), ...meta, ...alleles].join('\t'));
+  }
+  const blob = new Blob([rows.join('\n')], { type: 'text/tab-separated-values' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${$('project-name').value.trim() || 'mlstudio'}_results.tsv`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// Toggle full per-locus rendering of the comparison table.
+$('show-all-loci')?.addEventListener('change', () => renderComparisonTable());
 
 $('relax-btn').addEventListener('click', () => {
   if (!state.cy) return;
@@ -1428,20 +1633,32 @@ async function loadProject(name) {
   }
 }
 
-$('save-project-btn').addEventListener('click', async () => {
+// Modal-driven save flow — replaces the bare prompt() with a proper dialog.
+function openSaveModal() {
   if (!state.jobId) return;
-  const suggested = $('project-name').value.trim() ||
-                    `${state.schemeKey || 'run'}_${new Date().toISOString().slice(0,10)}`;
-  const name = prompt('Project name:', suggested);
-  if (!name) return;
-  // If the current "job" is a loaded project, save it under a job id we
-  // don't have — the server only knows live jobs. So we route through a
-  // fresh save endpoint that takes the in-memory state. For now: only
-  // saving live jobs. Show a hint.
   if (state.jobId.startsWith('project:')) {
     alert('This is already a loaded project. Re-run the analysis to save under a new name.');
     return;
   }
+  const suggested = $('project-name').value.trim() ||
+                    `${state.schemeKey || 'run'}_${new Date().toISOString().slice(0,10)}`;
+  $('save-name').value = suggested;
+  $('save-error').textContent = '';
+  $('save-modal').classList.remove('hidden');
+  setTimeout(() => $('save-name').select(), 50);
+}
+$('save-project-btn').addEventListener('click', openSaveModal);
+$('save-close')?.addEventListener('click', () => $('save-modal').classList.add('hidden'));
+$('save-cancel')?.addEventListener('click', () => $('save-modal').classList.add('hidden'));
+$('save-modal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'save-modal') $('save-modal').classList.add('hidden');
+});
+$('save-name')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('save-confirm').click();
+});
+$('save-confirm')?.addEventListener('click', async () => {
+  const name = $('save-name').value.trim();
+  if (!name) { $('save-error').textContent = 'Name is required.'; return; }
   try {
     const r = await fetch(`/api/jobs/${state.jobId}/save`, {
       method: 'POST',
@@ -1451,9 +1668,9 @@ $('save-project-btn').addEventListener('click', async () => {
     if (!r.ok) throw new Error(await r.text());
     await r.json();
     await loadProjects();
-    alert(`Saved as "${name}"`);
+    $('save-modal').classList.add('hidden');
   } catch (e) {
-    alert('Save failed: ' + e.message);
+    $('save-error').textContent = 'Save failed: ' + e.message;
   }
 });
 

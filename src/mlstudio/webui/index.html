@@ -82,6 +82,11 @@
 
     <section class="panel sticky-run">
       <button id="run-btn" class="primary large" disabled>▶  Analyze</button>
+      <div class="run-actions">
+        <button id="rerun-btn" class="ghost small" disabled title="Re-run analysis with the current parameters">↻ Re-run</button>
+        <button id="change-scheme-btn" class="ghost small" disabled title="Re-analyze the same folder with a different scheme">⇄ Change scheme</button>
+        <button id="reset-btn" class="ghost small" title="Clear results and return to the welcome screen">⨯ Reset</button>
+      </div>
       <div id="job-progress" class="progress hidden">
         <div class="bar"><div class="bar-fill"></div></div>
         <div id="progress-text" class="muted small"></div>
@@ -123,6 +128,7 @@
         <input id="cluster-threshold" type="range" min="0" max="200" value="0" />
         <div class="row"><span class="muted small">≤ alleles apart → one cluster</span><span id="cluster-threshold-val">0</span></div>
       </label>
+      <label class="check"><input type="checkbox" id="show-halos" checked /> Show cluster halos</label>
       <label class="check"><input type="checkbox" id="show-nontree" /> Show non-tree close connections (red dashed)</label>
       <label class="field">
         <span>Edge label threshold</span>
@@ -186,6 +192,11 @@
 
     <div id="tab-tree" class="tab-pane active">
       <div id="cy"></div>
+      <div id="zoom-dial" class="zoom-dial" title="Zoom">
+        <button id="zoom-in"  class="zoom-btn" title="Zoom in (+)">+</button>
+        <button id="zoom-reset" class="zoom-btn zoom-pct" title="Fit to screen">100%</button>
+        <button id="zoom-out" class="zoom-btn" title="Zoom out (−)">−</button>
+      </div>
       <div id="legend" class="legend hidden"></div>
       <div id="empty-state" class="empty-state">
         <h2>Welcome</h2>
@@ -200,6 +211,12 @@
     </div>
 
     <div id="tab-table" class="tab-pane">
+      <div class="tab-toolbar">
+        <label class="check inline"><input type="checkbox" id="show-all-loci" /> Show every locus</label>
+        <span class="muted small" id="table-summary"></span>
+        <span style="flex:1"></span>
+        <button id="export-tsv-btn" class="ghost small">⤓ Export TSV (all hits)</button>
+      </div>
       <div id="comparison-table" class="comparison-table"></div>
     </div>
 
@@ -231,6 +248,27 @@
         <tbody></tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<div id="save-modal" class="modal hidden">
+  <div class="modal-card" style="width:min(440px,92vw)">
+    <header>
+      <h2>Save project</h2>
+      <button id="save-close" class="ghost mini">✕</button>
+    </header>
+    <div class="modal-body">
+      <label class="field">
+        <span>Project name</span>
+        <input id="save-name" type="text" placeholder="my_outbreak_2026-05" autofocus />
+      </label>
+      <p class="muted small">Projects are stored under <code>~/.local/share/mlstudio/projects/</code> and reload-able from section 0.</p>
+      <div id="save-error" class="muted small" style="color:#dc2626"></div>
+    </div>
+    <footer>
+      <button id="save-cancel" class="ghost">Cancel</button>
+      <button id="save-confirm" class="primary">Save</button>
+    </footer>
   </div>
 </div>
 
