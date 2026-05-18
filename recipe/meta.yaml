@@ -6,10 +6,8 @@ package:
   version: {{ version }}
 
 source:
-  url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz
-  # Replace with the real sdist sha256 produced by `python -m build --sdist`
-  # before opening the bioconda-recipes PR.
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  url: https://github.com/iowa69/{{ name }}/archive/refs/tags/v{{ version }}.tar.gz
+  sha256: 14dbdaa4feabc921a3be87e3a92c8b7cdecbf50829ff950afad5e77fbd7e1504
 
 build:
   number: 0
