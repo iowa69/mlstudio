@@ -608,8 +608,19 @@ function renderComparisonTable() {
                 getter: r => state.metaBySample?.[r.sample]?.[f] || '' });
   }
 
+  // Filter by the global search box if present + non-empty.
+  const q = ($("tab-search")?.value || "").trim().toLowerCase();
+  let filtered = state.results;
+  if (q) {
+    filtered = state.results.filter(r => {
+      const hay = [r.sample, r.st, r.cgst, r.cgst_id, r.clonal_complex,
+                   ...(r.amr_flags || []), state.clusterOf?.[r.sample]]
+        .filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+  }
   // Sort
-  const rows = [...state.results].sort((a, b) => {
+  const rows = [...filtered].sort((a, b) => {
     const col = cols.find(c => c.key === sortField) || cols[0];
     const va = col.getter(a), vb = col.getter(b);
     const cmp = (typeof va === 'number' && typeof vb === 'number')
@@ -619,11 +630,36 @@ function renderComparisonTable() {
   });
 
   const palette = state.currentPalette || {};
+  // Clinical-jargon glossary for column headers. Toggled by the
+  // "Show clinical-jargon tooltips" setting; tip rendered via the
+  // browser's native title attribute, augmented with a "?" hint icon
+  // (CSS-driven, see th[data-help] in style.css).
+  const HEADER_HELP = {
+    st: "Classical 7-gene Sequence Type. PubMLST nomenclature. Suffix '~' means a partial profile was matched; '~?' means more than one ST fits.",
+    cgst: "cgMLST profile identifier (locally assigned). Two isolates with identical cgMLST profiles share a cgST. Hover the cell for the underlying profile hash.",
+    cluster_id: "Cluster at the current halo distance. The MST and AMR colour-coding use this column.",
+    clonal_complex: "PubMLST clonal complex (CC) — eBURST-derived grouping of related STs.",
+    hc0:  "HierCC HC0 cluster (Enterobase nomenclature). Identical profile / no allele differences. Local numbering.",
+    hc5:  "HierCC HC5 cluster. Up to 5 allele differences. Common short-term-outbreak boundary.",
+    hc10: "HierCC HC10 cluster. Up to 10 allele differences. SeqSphere outbreak default.",
+    hc50: "HierCC HC50 cluster. Up to 50 allele differences. Sublineage / clonal group.",
+    amr_flags: "Phenotype flags from AMRFinderPlus --plus: MRSA, VRE, VRSA, ESBL+, CPE, possible MDR/XDR. Red = clinically critical; amber = warning; blue = informational.",
+    qc: "Assembly QC verdict (PASS / WARN / FAIL). Hover for N50, # contigs, total length, GC%, and any failure reasons.",
+    exc: "EXC — locus called as an Exact Match against an allele in the scheme.",
+    inf: "INF — locus called as an Inexact / Novel allele (close to a scheme allele but not 100%).",
+    lnf: "LNF — Locus Not Found at or above the identity / coverage thresholds.",
+    notes: "Free-text annotations from the calling step (warnings, ST disambiguation, AMR phenotype tags).",
+    sample: "Sample name (assembly file stem). Click the row to open the detail panel.",
+  };
+  const showHelp = (loadSettings?.()?.show_tooltips ?? true);
+
   const html = [];
   html.push('<table><thead><tr>');
   for (const c of cols) {
     const arrow = sortField === c.key ? (sortAsc ? ' ↑' : ' ↓') : '';
-    html.push(`<th class="${c.cls}" data-key="${c.key}">${c.label}${arrow}</th>`);
+    const help = showHelp ? HEADER_HELP[c.key] : null;
+    const helpAttr = help ? ` data-help="1" title="${help.replace(/"/g, "'")}"` : '';
+    html.push(`<th class="${c.cls}" data-key="${c.key}"${helpAttr}>${c.label}${arrow}</th>`);
   }
   html.push('</tr></thead><tbody>');
   for (const r of rows) {
@@ -2108,6 +2144,320 @@ subscribe = function(jobId) {
 };
 // hooks into existing onmessage path — already calls renderMst which sets state.jobId
 
+// ---- Toast notifications ---------------------------------------------------
+// Replaces alert() with a stackable, animated, kind-tinted notification.
+// Usage: toast("Saved", "ok") / toast("AMR scan skipped", "warn") / etc.
+function toast(message, kind = "info", title = null, ms = 4500) {
+  const stack = $("toast-stack");
+  if (!stack) return;
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.innerHTML = (title ? `<div class="title">${title}</div>` : "") +
+                 `<div class="body">${message}</div>`;
+  stack.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("fade-out");
+    setTimeout(() => el.remove(), 220);
+  }, ms);
+}
+// Bridge: failure modes that used alert() / status-bar errors now toast too.
+window.addEventListener("error", (e) => toast(e.message, "error", "JS error"));
+
+// ---- Theme + Settings ------------------------------------------------------
+// CSS custom properties are scoped to :root[data-theme]; flipping the attribute
+// switches the whole palette without rebuilding the tree.
+const SETTINGS_KEY = "mlstudio.settings.v1";
+const SETTINGS_DEFAULTS = {
+  theme: "auto",
+  default_threshold: 5,
+  palette: "pastel",
+  show_tooltips: true,
+  autoswitch: true,
+};
+function loadSettings() {
+  try {
+    return { ...SETTINGS_DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+  } catch { return { ...SETTINGS_DEFAULTS }; }
+}
+function saveSettings(s) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+}
+function applyTheme(theme) {
+  let resolved = theme;
+  if (theme === "auto") {
+    resolved = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  document.documentElement.setAttribute("data-theme", resolved);
+}
+const _settings = loadSettings();
+applyTheme(_settings.theme);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",
+  () => { if (loadSettings().theme === "auto") applyTheme("auto"); });
+
+$("theme-toggle")?.addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme") || "light";
+  const next = cur === "dark" ? "light" : "dark";
+  applyTheme(next);
+  const s = loadSettings();
+  s.theme = next; saveSettings(s);
+});
+
+// Settings modal
+$("open-settings")?.addEventListener("click", () => {
+  const s = loadSettings();
+  $("setting-theme").value = s.theme;
+  $("setting-default-threshold").value = s.default_threshold;
+  $("setting-palette").value = s.palette;
+  $("setting-show-tooltips").checked = s.show_tooltips;
+  $("setting-autoswitch").checked = s.autoswitch;
+  $("settings-modal").classList.remove("hidden");
+});
+$("settings-close")?.addEventListener("click", () => $("settings-modal").classList.add("hidden"));
+$("settings-save")?.addEventListener("click", () => {
+  const s = {
+    theme: $("setting-theme").value,
+    default_threshold: parseInt($("setting-default-threshold").value) || 5,
+    palette: $("setting-palette").value,
+    show_tooltips: $("setting-show-tooltips").checked,
+    autoswitch: $("setting-autoswitch").checked,
+  };
+  saveSettings(s);
+  applyTheme(s.theme);
+  $("settings-modal").classList.add("hidden");
+  toast("Settings saved", "success");
+});
+$("settings-reset")?.addEventListener("click", () => {
+  saveSettings({ ...SETTINGS_DEFAULTS });
+  applyTheme(SETTINGS_DEFAULTS.theme);
+  $("settings-modal").classList.add("hidden");
+  toast("Settings reset", "info");
+});
+
+// About modal
+$("open-about")?.addEventListener("click", () => $("about-modal").classList.remove("hidden"));
+$("about-close")?.addEventListener("click", () => $("about-modal").classList.add("hidden"));
+
+// Global keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "Escape") {
+    document.querySelectorAll(".modal").forEach(m => m.classList.add("hidden"));
+    closeDetailPanel();
+  } else if (e.key === "d" || e.key === "D") {
+    $("theme-toggle")?.click();
+  } else if (e.key === "/") {
+    const inp = $("tab-search");
+    if (inp && !$("tab-search-wrap").classList.contains("hidden")) {
+      e.preventDefault(); inp.focus();
+    }
+  }
+});
+
+// ---- Quick-stats banner ---------------------------------------------------
+function renderQuickStats() {
+  const box = $("quick-stats");
+  if (!box) return;
+  if (!state.results || !state.results.length) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  const n = state.results.length;
+  const cgsts = new Set(state.results.map(r => r.cgst_id || r.cgst).filter(Boolean));
+  const sts = new Set(state.results.map(r => r.st).filter(Boolean));
+  const flagCounts = {};
+  for (const r of state.results) {
+    for (const f of (r.amr_flags || [])) {
+      const key = f.replace(/-.*$/, "");
+      flagCounts[key] = (flagCounts[key] || 0) + 1;
+    }
+  }
+  const qcFail = state.results.filter(r => r.qc?.verdict === "FAIL").length;
+  const qcWarn = state.results.filter(r => r.qc?.verdict === "WARN").length;
+  const hc10 = new Set();
+  for (const r of state.results) {
+    const c = r.hier?.HC10;
+    if (c && c !== "?") hc10.add(c);
+  }
+
+  const chips = [];
+  chips.push(`<span class="qs-chip"><b>${n}</b> samples</span>`);
+  if (sts.size)     chips.push(`<span class="qs-chip"><b>${sts.size}</b> ST${sts.size>1?"s":""}</span>`);
+  if (cgsts.size)   chips.push(`<span class="qs-chip"><b>${cgsts.size}</b> cgST${cgsts.size>1?"s":""}</span>`);
+  if (hc10.size)    chips.push(`<span class="qs-chip"><b>${hc10.size}</b> outbreak cluster${hc10.size>1?"s":""} @ HC10</span>`);
+  for (const [flag, count] of Object.entries(flagCounts).sort((a,b)=>b[1]-a[1])) {
+    const cls = /^MRSA|VRSA|CPE|XDR/i.test(flag) ? "critical"
+              : /^VRE|ESBL|MDR/i.test(flag) ? "warn" : "";
+    chips.push(`<span class="qs-chip ${cls}"><b>${count}</b> ${flag}</span>`);
+  }
+  if (qcFail) chips.push(`<span class="qs-chip critical"><b>${qcFail}</b> QC FAIL</span>`);
+  if (qcWarn) chips.push(`<span class="qs-chip warn"><b>${qcWarn}</b> QC WARN</span>`);
+  box.innerHTML = chips.join("");
+  box.classList.remove("hidden");
+}
+
+// Hook into the post-render path: every time results / mst change, refresh.
+const _origRenderMst = renderMst;
+window.renderMst = function() {
+  _origRenderMst.apply(this, arguments);
+  renderQuickStats();
+  attachNodeClickToDetailPanel();
+};
+
+// ---- Per-sample detail panel ----------------------------------------------
+function attachNodeClickToDetailPanel() {
+  if (!state.cy) return;
+  state.cy.off("tap", "node");
+  state.cy.on("tap", "node", (evt) => {
+    const id = evt.target.id();
+    openDetailPanel(id);
+  });
+}
+function closeDetailPanel() { $("detail-panel")?.classList.add("hidden"); }
+$("detail-close")?.addEventListener("click", closeDetailPanel);
+
+function openDetailPanel(sampleId) {
+  const r = state.results.find(x => x.sample === sampleId);
+  if (!r) return;
+  $("detail-sample").textContent = sampleId;
+  const subtitle = [
+    r.st ? `ST ${r.st}` : null,
+    r.clonal_complex,
+    r.cgst_id ? `cgST ${r.cgst_id}` : (r.cgst ? `cgST ${r.cgst}` : null),
+    state.clusterOf?.[sampleId] || null,
+  ].filter(Boolean).join(" · ");
+  $("detail-subtitle").textContent = subtitle || "—";
+
+  const calls = r.calls || {};
+  const exc = Object.values(calls).filter(c => c.flag === "EXC").length;
+  const inf = Object.values(calls).filter(c => c.flag === "INF").length;
+  const lnf = Object.values(calls).filter(c => c.flag === "LNF").length;
+  const amr = state.amr_results?.[sampleId] || [];
+
+  // HierCC sub-block
+  const hier = r.hier || {};
+  const hierRows = ["HC0","HC2","HC5","HC10","HC25","HC50"]
+      .filter(k => hier[k] !== undefined)
+      .map(k => `<div class="detail-row"><span class="k">${k} cluster</span><span class="v">${hier[k]}</span></div>`)
+      .join("");
+
+  // AMR class buckets
+  const cls = r.amr_classes || {};
+  const classRows = Object.keys(cls).sort().map(c =>
+    `<div class="detail-class-block"><b>${c.toLowerCase()}</b><br>${cls[c].join(", ")}</div>`
+  ).join("") || '<span class="muted small">No AMR genes detected.</span>';
+
+  // Top 5 nearest neighbours by allele distance
+  let nearest = "";
+  if (state.mst) {
+    const myEdges = state.mst.elements.filter(e =>
+      e.data.source && (e.data.source === sampleId || e.data.target === sampleId)
+    );
+    if (myEdges.length) {
+      const pairs = myEdges.map(e => ({
+        other: e.data.source === sampleId ? e.data.target : e.data.source,
+        d: e.data.weight,
+      })).sort((a,b) => a.d - b.d).slice(0, 5);
+      nearest = pairs.map(p =>
+        `<div class="detail-row"><span class="k">${p.other}</span><span class="v">${p.d} alleles</span></div>`
+      ).join("");
+    }
+  }
+
+  // Metadata
+  const md = state.metaBySample?.[sampleId] || {};
+  const mdRows = Object.entries(md).map(([k,v]) =>
+    `<div class="detail-row"><span class="k">${k}</span><span class="v">${v}</span></div>`
+  ).join("") || '<span class="muted small">No metadata uploaded.</span>';
+
+  // QC
+  const qc = r.qc || {};
+  const qcRows = qc.verdict
+    ? `<div class="detail-row"><span class="k">Verdict</span><span class="v"><span class="amr-flag ${qc.verdict==='PASS'?'flag-info':qc.verdict==='WARN'?'flag-warn':'flag-critical'}">${qc.verdict}</span></span></div>
+       <div class="detail-row"><span class="k">Total length</span><span class="v">${(qc.total_length||0).toLocaleString()} bp</span></div>
+       <div class="detail-row"><span class="k"># contigs</span><span class="v">${qc.n_contigs ?? '—'}</span></div>
+       <div class="detail-row"><span class="k">N50</span><span class="v">${(qc.n50||0).toLocaleString()} bp</span></div>
+       <div class="detail-row"><span class="k">GC%</span><span class="v">${qc.gc_percent ?? '—'}</span></div>
+       <div class="detail-row"><span class="k">Ambig. (N) bases</span><span class="v">${(qc.n_count||0).toLocaleString()} (${((qc.n_fraction||0)*100).toFixed(2)}%)</span></div>
+       ${(qc.reasons||[]).map(r => `<div class="detail-row"><span class="k">⚠</span><span class="v">${r}</span></div>`).join("")}`
+    : '<span class="muted small">No QC available.</span>';
+
+  const flagsHtml = (r.amr_flags || []).map(f => {
+    const c = /^MRSA|VRSA|CPE|XDR/.test(f) ? "flag-critical"
+            : /^VRE|ESBL|MDR/.test(f) ? "flag-warn" : "flag-info";
+    return `<span class="amr-flag ${c}">${f}</span>`;
+  }).join(" ") || "—";
+
+  $("detail-body").innerHTML = `
+    <div class="detail-section">
+      <h3>Typing</h3>
+      <div class="detail-row"><span class="k">ST</span><span class="v">${r.st || '—'}</span></div>
+      <div class="detail-row"><span class="k">Clonal complex</span><span class="v">${r.clonal_complex || '—'}</span></div>
+      <div class="detail-row"><span class="k">cgST (local)</span><span class="v">${r.cgst_id || '—'}${r.cgst ? ` <code style="font-size:11px">(${r.cgst})</code>` : ''}</span></div>
+      <div class="detail-row"><span class="k">Scheme</span><span class="v">${r.scheme || '—'}</span></div>
+    </div>
+    ${hierRows ? `<div class="detail-section"><h3>HierCC clusters (local)</h3>${hierRows}</div>` : ''}
+    <div class="detail-section">
+      <h3>Allele calls</h3>
+      <div class="detail-row"><span class="k">EXC</span><span class="v">${exc}</span></div>
+      <div class="detail-row"><span class="k">INF</span><span class="v">${inf}</span></div>
+      <div class="detail-row"><span class="k">LNF</span><span class="v">${lnf}</span></div>
+    </div>
+    <div class="detail-section">
+      <h3>Clinical flags</h3>
+      <div>${flagsHtml}</div>
+    </div>
+    ${amr.length ? `<div class="detail-section"><h3>AMR by drug class</h3>${classRows}</div>` : ''}
+    ${nearest ? `<div class="detail-section"><h3>Nearest neighbours</h3>${nearest}</div>` : ''}
+    <div class="detail-section"><h3>Assembly QC</h3>${qcRows}</div>
+    <div class="detail-section"><h3>Metadata</h3>${mdRows}</div>
+    ${r.notes?.length ? `<div class="detail-section"><h3>Notes</h3><div class="muted small">${r.notes.join('<br>')}</div></div>` : ''}
+  `;
+  $("detail-panel").classList.remove("hidden");
+  // Highlight selected node
+  if (state.cy) {
+    state.cy.elements().removeClass("cy-highlight");
+    state.cy.getElementById(sampleId).addClass("cy-highlight");
+  }
+}
+
+// ---- Tab-level search box -------------------------------------------------
+// Visible on MST + Table tabs. Filters the table; highlights matching node
+// on the tree.
+$("tab-search")?.addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  // Highlight on MST
+  if (state.cy) {
+    state.cy.elements().removeClass("cy-highlight");
+    if (q) {
+      const matches = state.cy.nodes().filter(n => {
+        const r = state.results.find(x => x.sample === n.id());
+        const haystack = [n.id(), r?.st, r?.cgst, r?.cgst_id, r?.clonal_complex,
+                          ...(r?.amr_flags || [])].join(" ").toLowerCase();
+        return haystack.includes(q);
+      });
+      matches.addClass("cy-highlight");
+      if (matches.length === 1) state.cy.fit(matches, 80);
+    }
+  }
+  // Filter table
+  if (typeof renderComparisonTable === "function") renderComparisonTable();
+});
+
+// Show search box only on tabs that benefit from it.
+function _updateSearchVisibility(t) {
+  const wrap = $("tab-search-wrap");
+  if (!wrap) return;
+  wrap.classList.toggle("hidden", !["tree", "table", "amr"].includes(t));
+}
+const _origActivateTab = activateTab;
+window.activateTab = function(t) {
+  _origActivateTab.call(this, t);
+  _updateSearchVisibility(t);
+  renderQuickStats();
+};
+_updateSearchVisibility(document.querySelector(".tab.active")?.dataset.tab || "setup");
+
 // ---- Init ------------------------------------------------------------------
 
 loadCatalog().catch(e => console.error(e));
@@ -2118,8 +2468,13 @@ loadProjects().catch(e => console.error(e));
 api('/health').then(h => {
   const el = $('footer-version');
   if (el && h?.version) el.textContent = `v${h.version}`;
+  const av = $('about-version');
+  if (av && h?.version) av.textContent = `v${h.version}`;
 }).catch(() => { /* footer already has the byline; version is optional */ });
 
 // Auto-fill folder from ?folder= URL param
 const urlParams = new URLSearchParams(location.search);
 if (urlParams.get('folder')) $('folder-input').value = urlParams.get('folder');
+
+// Greet the user once per session so they know the tool is alive.
+toast("Welcome — pick a folder and a scheme to get started.", "info", "MLSTudio ready");

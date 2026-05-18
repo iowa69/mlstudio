@@ -17,14 +17,18 @@
     <span class="logo">M</span>
     <div>
       <h1>MLSTudio</h1>
-      <p class="tagline">MLST · cgMLST · interactive minimum spanning tree</p>
+      <p class="tagline">MLST · cgMLST · AMR · interactive minimum spanning tree</p>
     </div>
   </div>
   <div class="topbar-actions">
-    <span id="status-dot" class="dot idle"></span>
-    <span id="status-text">Idle</span>
+    <span class="status-pill"><span id="status-dot" class="dot idle"></span><span id="status-text">Idle</span></span>
+    <button id="theme-toggle" class="icon-btn" title="Toggle dark mode (D)">◐</button>
+    <button id="open-settings" class="icon-btn" title="Settings">⚙</button>
+    <button id="open-about" class="icon-btn" title="About MLSTudio">?</button>
   </div>
 </header>
+
+<div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
 <main class="layout">
   <aside class="sidebar">
@@ -253,7 +257,13 @@
       <button class="tab" data-tab="table">📊 Table</button>
       <button class="tab" data-tab="amr">💊 AMR</button>
       <button class="tab" data-tab="stats">📈 Statistics</button>
+      <div class="tab-spacer"></div>
+      <div class="tab-search hidden" id="tab-search-wrap">
+        <input id="tab-search" type="text" placeholder="Search sample / ST / cgST…" />
+      </div>
     </nav>
+
+    <div id="quick-stats" class="quick-stats hidden"></div>
 
     <!-- Setup / Welcome tab — the default landing -->
     <div id="tab-setup" class="tab-pane active">
@@ -401,6 +411,85 @@
     </table>
   </div>
 </section>
+
+<!-- Per-sample detail dock — opens when a node is clicked on the MST -->
+<aside id="detail-panel" class="detail-panel hidden">
+  <header>
+    <div>
+      <h2 id="detail-sample">—</h2>
+      <p id="detail-subtitle" class="muted small">—</p>
+    </div>
+    <button id="detail-close" class="ghost mini" title="Close (Esc)">✕</button>
+  </header>
+  <div class="detail-body" id="detail-body">…</div>
+</aside>
+
+<div id="settings-modal" class="modal hidden">
+  <div class="modal-card" style="width:min(540px,92vw)">
+    <header>
+      <h2>Settings</h2>
+      <button id="settings-close" class="ghost mini">✕</button>
+    </header>
+    <div class="modal-body">
+      <label class="field">
+        <span>Theme</span>
+        <select id="setting-theme">
+          <option value="auto">Match system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Default cluster halo threshold (alleles)</span>
+        <input id="setting-default-threshold" type="number" min="0" value="5" />
+      </label>
+      <label class="field">
+        <span>Color palette</span>
+        <select id="setting-palette">
+          <option value="pastel">Pastel (default, colorblind-friendly)</option>
+          <option value="bold">Bold</option>
+          <option value="viridis">Viridis (continuous)</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="setting-show-tooltips" checked /> Show clinical-jargon tooltips on column headers</label>
+      <label class="check"><input type="checkbox" id="setting-autoswitch" checked /> Auto-switch to MST tab when analysis finishes</label>
+      <p class="muted small" style="margin-top:12px">Settings persist in your browser's localStorage. They never leave this machine.</p>
+    </div>
+    <footer>
+      <button id="settings-reset" class="ghost">Reset to defaults</button>
+      <button id="settings-save" class="primary">Save</button>
+    </footer>
+  </div>
+</div>
+
+<div id="about-modal" class="modal hidden">
+  <div class="modal-card" style="width:min(620px,92vw)">
+    <header>
+      <h2>About MLSTudio</h2>
+      <button id="about-close" class="ghost mini">✕</button>
+    </header>
+    <div class="modal-body">
+      <p><b>MLSTudio</b> <span id="about-version">v1.3.1</span> — free, open-source MLST / cgMLST / AMR typing with an interactive minimum-spanning-tree GUI for Linux. A free alternative to Ridom SeqSphere+ for clinical-micro outbreak investigation.</p>
+      <p>Developed by <b>Giovanni Lorenzin</b>. Released under the MIT license.</p>
+      <h3 style="margin-top:18px;margin-bottom:6px">Underlying methods</h3>
+      <ul class="muted small" style="margin-top:0;padding-left:18px;line-height:1.7">
+        <li><b>Allele calling</b>: chewBBACA-style prodigal → batched BLAST (megablast). HSP aggregation + candidate-set ST lookup for partial profiles.</li>
+        <li><b>Distance + MST</b>: Hamming over allele tuples → minimum spanning tree (Kruskal, with non-tree close-pair edges).</li>
+        <li><b>Nomenclature</b>: persistent local cgST integers + HierCC-style HC0/HC2/HC5/HC10/HC25/HC50 cluster IDs (Enterobase convention).</li>
+        <li><b>Resistance</b>: AMRFinderPlus <code>--plus</code> with organism-specific point-mutation panels; clinical phenotype flags (MRSA, VRE, ESBL+, CPE, MDR/XDR).</li>
+        <li><b>QC</b>: per-assembly N50 / total length / GC% / ambiguous-base count with organism-aware PASS/WARN/FAIL verdict.</li>
+      </ul>
+      <h3 style="margin-top:18px;margin-bottom:6px">Resources</h3>
+      <ul class="muted small" style="margin-top:0;padding-left:18px;line-height:1.7">
+        <li><a href="https://github.com/iowa69/mlstudio" target="_blank">GitHub repository</a></li>
+        <li><a href="https://www.cgmlst.org/ncs" target="_blank">cgMLST.org Nomenclature Server</a> — scheme source</li>
+        <li><a href="https://pubmlst.org" target="_blank">PubMLST</a> / <a href="https://bigsdb.pasteur.fr" target="_blank">BIGSdb-Pasteur</a> — classical MLST schemes</li>
+        <li><a href="https://www.ncbi.nlm.nih.gov/pathogens/antimicrobial-resistance/AMRFinder/" target="_blank">AMRFinderPlus</a></li>
+        <li><a href="https://enterobase.readthedocs.io/en/latest/features/clustering.html" target="_blank">EnteroBase HierCC documentation</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
 
 <footer class="app-footer">
   <span class="byline">MLSTudio · Developed by <strong>Giovanni Lorenzin</strong></span>
