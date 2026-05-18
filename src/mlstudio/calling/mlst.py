@@ -41,6 +41,13 @@ class AlleleCall:
     coverage: float
     bitscore: float
     flag: str                  # EXC, NIPHEM, NIPH, ASM, LNF, INF
+    # When `flag == "INF"`, several alleles often share the partial
+    # alignment we did see — populated with every allele whose hit is
+    # within 0.5 % identity and 5 % alignment length of the top. The
+    # profile-table lookup uses these as a candidate set instead of
+    # locking onto the single highest-bitscore one (which is essentially
+    # a tie-break under low coverage).
+    candidates: list[str] = field(default_factory=list)
 
     @property
     def is_exact(self) -> bool:
@@ -148,25 +155,44 @@ def _best_hit(hits: list[dict], locus: str,
                 cur["bitscore"] = h["bitscore"]
                 cur["length"] = h["length"]
                 cur["slen"] = h["slen"]
-    agg = sorted(by_subj.values(), key=lambda h: h["bitscore"], reverse=True)
+    # Rank by (coverage, identity, bitscore). The first key is critical:
+    # without it, a long allele variant with one big HSP can outrank the
+    # actually-correct shorter allele that aligns at 100 %. Real example
+    # from Efaecium ddl: ddl_67 is 1 512 bp with five scattered HSPs
+    # summing to 71 % subject coverage; ddl_1 is the canonical 465 bp
+    # allele at 100 % cov / 100 % identity. Bitscore-sort picks ddl_67;
+    # coverage-sort picks ddl_1 — and ST1478 (which expects ddl=1) then
+    # falls out of the profile lookup cleanly.
+    for h in by_subj.values():
+        h["_coverage"] = h["_aligned"] / max(1, h["slen"])
+    agg = sorted(by_subj.values(),
+                 key=lambda h: (h["_coverage"], h["pident"], h["bitscore"]),
+                 reverse=True)
     top = agg[0]
-    cov = 100.0 * top["_aligned"] / max(1, top["slen"])
+    cov = 100.0 * top["_coverage"]
     allele_id = top["sseqid"].rsplit("_", 1)[-1]
+    candidates: list[str] = []
     if top["pident"] >= min_id and cov >= min_cov:
-        # Treat near-100% as EXC; small drops in either pident or coverage
-        # — typical of a single SNP or a one-bp gap — are INF.
         if top["pident"] >= 99.999 and cov >= 99.0:
             flag = "EXC"
             allele = allele_id
+            candidates = [allele_id]
         else:
             flag = "INF"
             allele = f"{allele_id}~"
+            # Near-tied candidates: anything within 0.5 % identity and
+            # 5 percentage points of coverage of the top.
+            for h in agg:
+                if (abs(h["pident"] - top["pident"]) <= 0.5
+                        and abs(h["_coverage"] - top["_coverage"]) <= 0.05):
+                    candidates.append(h["sseqid"].rsplit("_", 1)[-1])
     else:
         flag = "LNF"
         allele = None
     return AlleleCall(locus=locus, allele=allele,
                       identity=top["pident"], coverage=cov,
-                      bitscore=top["bitscore"], flag=flag)
+                      bitscore=top["bitscore"], flag=flag,
+                      candidates=candidates)
 
 
 def _load_profile_table(scheme: Scheme) -> tuple[list[str], dict[tuple[str, ...], str]]:
@@ -218,16 +244,99 @@ def call_mlst(
         result.calls[loc].allele.rstrip("~") if result.calls[loc].allele else "0"
         for loc in loci_order
     )
-    exact_only = tuple(a for a in allele_tuple)
-    if "0" in exact_only:
-        result.st = None
-        result.notes.append("missing allele(s) — no ST assigned")
-    else:
-        st = profile_lookup.get(exact_only)
-        if st is None:
-            result.st = None
-            result.notes.append("novel allele combination — no matching ST")
+    # Direct exact-match first
+    st = None
+    if "0" not in allele_tuple:
+        st = profile_lookup.get(allele_tuple)
+        if st is not None:
+            inexact = any(c.flag == "INF" for c in result.calls.values())
+            result.st = f"{st}*" if inexact else st
+
+    # Fuzzy lookup. When an exact-tuple match failed, treat each EXC call as
+    # a hard constraint and each INF / LNF call as a wildcard ("we are not
+    # certain enough about this allele to use it for ST disambiguation"). A
+    # short BLAST hit at 100 % identity could plausibly belong to several
+    # very similar alleles, so penalising it would lose real STs — e.g.
+    # Efaecium ST1478, which has a 71-%-covered ddl-67~ that's most likely
+    # actually ddl-1 in this sequence context, would have been rejected.
+    #
+    # Special handling: PubMLST "0" in the profile table means "this locus
+    # is intentionally absent in this ST" (e.g. Efaecium ST1478 with the
+    # known pstS deletion). A null observed allele matches "0" exactly.
+    if result.st is None:
+        # Per-locus acceptance set: a profile's allele at this locus must
+        # be one of these values. EXC → single value. INF → all near-tied
+        # candidates BLAST returned. LNF (or null call) → any allele,
+        # including PubMLST's "0" sentinel for an intentionally absent
+        # locus (Efaecium ST1478 with the known pstS deletion is exactly
+        # this case).
+        accept: list[set[str] | None] = []
+        wildcard_loci: list[str] = []
+        for idx, loc in enumerate(loci_order):
+            call = result.calls[loc]
+            obs = allele_tuple[idx]
+            if call.flag == "EXC" and obs != "0":
+                accept.append({obs})
+            elif call.flag == "INF" and call.candidates:
+                accept.append(set(call.candidates))
+                wildcard_loci.append(loc + "?")
+            else:
+                accept.append(None)
+                wildcard_loci.append(loc)
+
+        # Score every profile by how specifically it fits our partial call.
+        # `bonus` rewards profiles where a locus we couldn't call is
+        # *also* "0" (intentionally absent) in the profile — that turns a
+        # wildcard slot into evidence rather than just a free pass. Without
+        # this, partial profiles with one missing locus produce many tied
+        # STs (10–60 for Efaecium); the bonus lifts the one biologically
+        # consistent ST out of the tie. Example: ST1478 has pstS=0 in
+        # PubMLST and our pstS observed is LNF → +1 bonus → ST1478 picked
+        # over other STs that have a real pstS allele we couldn't recover.
+        scored: list[tuple[str, int]] = []   # (st, bonus)
+        for profile_key, profile_st in profile_lookup.items():
+            ok = True
+            bonus = 0
+            for idx, exp in enumerate(profile_key):
+                allowed = accept[idx]
+                obs = allele_tuple[idx]
+                if allowed is None:
+                    if exp == "0":
+                        bonus += 1
+                    continue
+                if exp == "0" and obs != "0":
+                    ok = False
+                    break
+                if exp not in allowed:
+                    ok = False
+                    break
+            if ok:
+                scored.append((profile_st, bonus))
+
+        if scored:
+            # Highest bonus wins; tie-break by ST number.
+            scored.sort(key=lambda x: (-x[1],
+                                       int(x[0]) if x[0].isdigit() else 1_000_000))
+            best_bonus = scored[0][1]
+            top_sts = sorted({st for st, b in scored if b == best_bonus},
+                             key=lambda s: int(s) if s.isdigit() else 1_000_000)
+            if len(top_sts) == 1:
+                result.st = f"{top_sts[0]}~"
+                result.notes.append(
+                    f"closest ST: {top_sts[0]} (matches all certain loci"
+                    + (f"; +{best_bonus} consistent null locus / loci"
+                       if best_bonus else "")
+                    + f"; uncertain: {', '.join(wildcard_loci) or 'none'})"
+                )
+            else:
+                result.st = f"{top_sts[0]}~?"
+                result.notes.append(
+                    f"ambiguous: {len(top_sts)} STs compatible with "
+                    f"partial profile — {', '.join(top_sts[:5])}"
+                    + (f", … (+{len(top_sts) - 5})" if len(top_sts) > 5 else "")
+                )
+        elif "0" in allele_tuple:
+            result.notes.append("missing allele(s) — no ST assigned")
         else:
-            any_inexact = any(c.flag == "INF" for c in result.calls.values())
-            result.st = f"{st}*" if any_inexact else st
+            result.notes.append("novel allele combination — no matching ST")
     return result
