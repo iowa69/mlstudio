@@ -63,6 +63,7 @@ def _slug_to_key_for_response(slug: str) -> str:
 class Job:
     def __init__(self, job_id: str, folder: Path, scheme_key: str, threads: int,
                  use_fastp: bool, run_amr: bool = False,
+                 run_mlst: bool = True,
                  output_folder: Path | None = None) -> None:
         self.id = job_id
         self.folder = folder
@@ -70,6 +71,10 @@ class Job:
         self.threads = threads
         self.use_fastp = use_fastp
         self.run_amr = run_amr
+        # run_mlst gates the auto-pairing of classical 7-gene MLST when the
+        # primary scheme is cgMLST. Default on — the user can untick the
+        # "Also compute classical MLST" checkbox to skip it.
+        self.run_mlst = run_mlst
         self.output_folder = output_folder or (folder / ".mlstudio")
         self.status = "pending"
         self.progress = 0.0
@@ -111,6 +116,7 @@ class AnalyzeRequest(BaseModel):
     threads: int = 0
     use_fastp: bool = True
     run_amr: bool = False
+    run_mlst: bool = True
     output_folder: str | None = None
     project_name: str | None = None
     min_identity: float | None = None
@@ -144,20 +150,20 @@ async def _run_job(job: Job) -> None:
         else:
             raise RuntimeError(f"Scheme {job.scheme_key} not cached. Pull it first.")
 
-        # 1b. Auto-pair: when running a cgMLST scheme, also run the matching
-        # 7-gene MLST so the user gets a classical ST alongside the cgMLST
-        # profile. Pulls the MLST scheme on demand (cached after first use).
-        # pull_scheme is sync and uses asyncio.run() internally — we have to
-        # call it from a thread so it gets its own event loop instead of
-        # clashing with the one driving _run_job.
+        # 1b. Auto-pair: when running a cgMLST scheme *and* the user ticked
+        # "Also compute classical 7-gene MLST", also run the paired MLST so
+        # they get a classical ST alongside the cgMLST profile. pull_scheme
+        # is sync and uses asyncio.run() internally — call it from a thread
+        # so it gets its own event loop instead of clashing with ours.
         mlst_companion: Scheme | None = None
+        paired_key: str | None = None
         from mlstudio.schemes.bigsdb import paired_mlst_key
-        if scheme.kind == "cgmlst":
-            paired = paired_mlst_key(job.scheme_key)
-            if paired:
+        if scheme.kind == "cgmlst" and job.run_mlst:
+            paired_key = paired_mlst_key(job.scheme_key)
+            if paired_key:
                 try:
                     mlst_companion = await asyncio.get_running_loop().run_in_executor(
-                        None, pull_scheme, paired,
+                        None, pull_scheme, paired_key,
                     )
                     job.message = (
                         f"Auto-paired classical MLST: {mlst_companion.name} "
@@ -165,7 +171,8 @@ async def _run_job(job: Job) -> None:
                     )
                     job.notify()
                 except Exception as e:
-                    log.warning("Could not auto-pair MLST scheme %s: %s", paired, e)
+                    log.warning("Could not auto-pair MLST scheme %s: %s", paired_key, e)
+                    paired_key = None
 
         # 2. Scan folder
         samples = scan(job.folder)
@@ -195,7 +202,7 @@ async def _run_job(job: Job) -> None:
                 # called against this scheme version. Key = path + size + mtime
                 # + scheme manifest mtime.
                 cache_dir = job.output_folder / "calls"
-                ck = _sample_cache_key(sample, scheme)
+                ck = _sample_cache_key(sample, scheme, mlst_paired=paired_key)
                 cached = _load_cached_result(cache_dir, ck)
 
                 if cached is not None:
@@ -550,6 +557,7 @@ def create_app() -> FastAPI:
         job = Job(
             job_id, folder, req.scheme, req.threads, req.use_fastp,
             run_amr=req.run_amr,
+            run_mlst=req.run_mlst,
             output_folder=Path(req.output_folder).expanduser() if req.output_folder else None,
         )
         JOBS[job_id] = job
@@ -823,11 +831,21 @@ def _histogram(vals: list[int], bins: int = 30) -> dict[str, list[int]]:
     return {"bins": edges, "counts": counts}
 
 
-def _sample_cache_key(sample: Sample, scheme: Scheme) -> str:
-    """Fingerprint that changes only when the assembly or scheme changes."""
+# Bumped when the result_dict schema changes so old cached entries don't
+# silently mask new fields. v2 → cgst + mlst_st + mlst_scheme columns.
+_CALL_CACHE_VERSION = "v2"
+
+
+def _sample_cache_key(sample: Sample, scheme: Scheme, *, mlst_paired: str | None = None) -> str:
+    """Fingerprint that changes only when the assembly, scheme, or analysis
+    surface changes. `mlst_paired` is the cache key of the auto-paired MLST
+    scheme (or None when MLST pairing is off), so toggling the checkbox
+    invalidates the cache rather than returning a stale MLST-less result."""
     st = sample.assembly.stat()
     scheme_hash = scheme.manifest_path.stat().st_mtime_ns if scheme.manifest_path.exists() else 0
-    raw = f"{sample.assembly.resolve()}|{st.st_size}|{st.st_mtime_ns}|{scheme.name}|{scheme_hash}"
+    raw = (f"{_CALL_CACHE_VERSION}|{sample.assembly.resolve()}|"
+           f"{st.st_size}|{st.st_mtime_ns}|{scheme.name}|{scheme_hash}|"
+           f"mlst={mlst_paired or ''}")
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 

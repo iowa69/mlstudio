@@ -326,6 +326,7 @@ $('run-btn').addEventListener('click', async () => {
     threads: parseInt($('threads').value) || 0,
     use_fastp: $('use-fastp').checked,
     run_amr: $('run-amr').checked,
+    run_mlst: $('run-mlst')?.checked ?? true,
     skip_st_lookup: $('skip-st').checked,
     project_name: $('project-name').value.trim() || null,
     min_identity: parseFloat($('min-identity').value) || null,
@@ -1046,10 +1047,29 @@ function renderMst() {
   const initialField = $('color-field').value || 'st';
   state.currentPalette = paletteFor(state.mst.elements, initialField);
 
+  // Build a lookup: sample → "[ST X]" or "[cgST Y]" so the node label
+  // carries the typing result inline. Prefer the classical ST when present
+  // (more familiar to clinicians); fall back to the cgST hash otherwise.
+  const typeSuffix = {};
+  for (const r of (state.results || [])) {
+    if (r.st) typeSuffix[r.sample] = ` [ST ${r.st}]`;
+    else if (r.cgst) typeSuffix[r.sample] = ` [cgST ${r.cgst}]`;
+  }
   const elements = state.mst.elements.map(el => {
     if (!el.data.source) {
       const v = el.data[initialField];
-      return { ...el, data: { ...el.data, _color: state.currentPalette[v] || '#94a3b8' } };
+      // Append the type suffix to the rendered label. For pie-collapsed
+      // nodes (e.g. "X +2"), the suffix follows the count, since members
+      // of a collapsed node share an identical cgMLST profile by
+      // definition and thus the same ST/cgST.
+      const id = el.data.id;
+      const baseLabel = el.data.label || id;
+      const suffix = typeSuffix[id] || '';
+      const newLabel = baseLabel.includes(suffix) ? baseLabel : baseLabel + suffix;
+      return { ...el,
+               data: { ...el.data,
+                       _color: state.currentPalette[v] || '#94a3b8',
+                       label: newLabel } };
     }
     return el;
   });
