@@ -248,6 +248,29 @@
         </select>
       </label>
     </section>
+
+    <!-- ===== Library tab sidebar ===== -->
+    <section class="panel" data-for="library">
+      <h2>Filters</h2>
+      <label class="field">
+        <span>Scheme</span>
+        <select id="library-filter-scheme"><option value="">All schemes</option></select>
+      </label>
+      <label class="field">
+        <span>Organism</span>
+        <select id="library-filter-organism"><option value="">All organisms</option></select>
+      </label>
+      <label class="field">
+        <span>Clinical flag</span>
+        <select id="library-filter-flag">
+          <option value="">All flags</option>
+          <option>MRSA</option><option>VRE</option><option>VRSA</option>
+          <option>ESBL+</option><option>CPE</option>
+          <option>possible MDR</option><option>possible XDR</option>
+        </select>
+      </label>
+      <p class="muted small" style="margin:8px 0 0 0">Click a row to open its detail card.<br>Tick checkboxes to add or delete in batch.</p>
+    </section>
   </aside>
 
   <section class="viewport">
@@ -257,6 +280,7 @@
       <button class="tab" data-tab="table">📊 Table</button>
       <button class="tab" data-tab="amr">💊 AMR</button>
       <button class="tab" data-tab="stats">📈 Statistics</button>
+      <button class="tab" data-tab="library">📁 Library</button>
       <div class="tab-spacer"></div>
       <div class="tab-search hidden" id="tab-search-wrap">
         <input id="tab-search" type="text" placeholder="Search sample / ST / cgST…" />
@@ -329,6 +353,18 @@
 
     <div id="tab-stats" class="tab-pane">
       <div id="stats-content" class="stats-content"></div>
+    </div>
+
+    <!-- Sample Library tab — every isolate ever analyzed -->
+    <div id="tab-library" class="tab-pane">
+      <div class="tab-toolbar">
+        <span class="muted small" id="library-summary">Loading library…</span>
+        <span style="flex:1"></span>
+        <button id="library-add-to-run" class="ghost small" disabled title="Pull the checked samples back into the current MST view">+ Add to current view</button>
+        <button id="library-delete" class="ghost small" disabled title="Remove the checked samples from the library">⨯ Delete checked</button>
+        <button id="library-refresh" class="ghost small" title="Reload library">⟳</button>
+      </div>
+      <div id="library-content" class="library-content"></div>
     </div>
   </section>
 </main>
@@ -431,6 +467,7 @@
       <button id="settings-close" class="ghost mini">✕</button>
     </header>
     <div class="modal-body">
+      <h3 style="margin-top:0;margin-bottom:8px;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Appearance</h3>
       <label class="field">
         <span>Theme</span>
         <select id="setting-theme">
@@ -440,10 +477,6 @@
         </select>
       </label>
       <label class="field">
-        <span>Default cluster halo threshold (alleles)</span>
-        <input id="setting-default-threshold" type="number" min="0" value="5" />
-      </label>
-      <label class="field">
         <span>Color palette</span>
         <select id="setting-palette">
           <option value="pastel">Pastel (default, colorblind-friendly)</option>
@@ -451,9 +484,44 @@
           <option value="viridis">Viridis (continuous)</option>
         </select>
       </label>
-      <label class="check"><input type="checkbox" id="setting-show-tooltips" checked /> Show clinical-jargon tooltips on column headers</label>
+      <label class="check"><input type="checkbox" id="setting-show-tooltips" checked /> Show clinical-jargon tooltips on column headers (with citation)</label>
       <label class="check"><input type="checkbox" id="setting-autoswitch" checked /> Auto-switch to MST tab when analysis finishes</label>
-      <p class="muted small" style="margin-top:12px">Settings persist in your browser's localStorage. They never leave this machine.</p>
+
+      <h3 style="margin-top:16px;margin-bottom:8px;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Calling defaults</h3>
+      <label class="field">
+        <span>Default min identity %</span>
+        <input id="setting-min-identity" type="number" min="50" max="100" step="0.5" value="90" />
+      </label>
+      <label class="field">
+        <span>Default min coverage %</span>
+        <input id="setting-min-coverage" type="number" min="50" max="100" step="0.5" value="80" />
+      </label>
+      <label class="field">
+        <span>Default cluster halo threshold (alleles)</span>
+        <input id="setting-default-threshold" type="number" min="0" value="5" />
+      </label>
+
+      <h3 style="margin-top:16px;margin-bottom:8px;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Resistance phenotype flags (Magiorakos 2012)</h3>
+      <div class="row" style="gap:10px">
+        <label class="field" style="flex:1">
+          <span>MDR threshold (# drug classes)</span>
+          <input id="setting-mdr" type="number" min="2" max="10" value="3" />
+        </label>
+        <label class="field" style="flex:1">
+          <span>XDR threshold (# drug classes)</span>
+          <input id="setting-xdr" type="number" min="3" max="15" value="5" />
+        </label>
+      </div>
+      <div class="row" style="gap:14px;flex-wrap:wrap;margin-top:6px">
+        <label class="check inline"><input type="checkbox" id="flag-MRSA" checked /> MRSA</label>
+        <label class="check inline"><input type="checkbox" id="flag-VRE" checked /> VRE</label>
+        <label class="check inline"><input type="checkbox" id="flag-VRSA" checked /> VRSA</label>
+        <label class="check inline"><input type="checkbox" id="flag-ESBL" checked /> ESBL+</label>
+        <label class="check inline"><input type="checkbox" id="flag-CPE" checked /> CPE</label>
+        <label class="check inline"><input type="checkbox" id="flag-MDR" checked /> MDR/XDR</label>
+      </div>
+
+      <p class="muted small" style="margin-top:12px">All settings persist in your browser's localStorage. They never leave this machine.</p>
     </div>
     <footer>
       <button id="settings-reset" class="ghost">Reset to defaults</button>
@@ -479,6 +547,7 @@
         <li><b>Resistance</b>: AMRFinderPlus <code>--plus</code> with organism-specific point-mutation panels; clinical phenotype flags (MRSA, VRE, ESBL+, CPE, MDR/XDR).</li>
         <li><b>QC</b>: per-assembly N50 / total length / GC% / ambiguous-base count with organism-aware PASS/WARN/FAIL verdict.</li>
       </ul>
+      <div id="about-citations"></div>
       <h3 style="margin-top:18px;margin-bottom:6px">Resources</h3>
       <ul class="muted small" style="margin-top:0;padding-left:18px;line-height:1.7">
         <li><a href="https://github.com/iowa69/mlstudio" target="_blank">GitHub repository</a></li>

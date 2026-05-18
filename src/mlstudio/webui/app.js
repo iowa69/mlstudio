@@ -527,12 +527,24 @@ function renderComparisonTable() {
     }
   }
   // Clinical resistance flags (MRSA / VRE / ESBL+ / CPE / MDR / XDR).
-  const anyFlags = state.results.some(r => r.amr_flags && r.amr_flags.length);
+  // Honour the per-flag enable map from Settings so the user can hide
+  // categories that aren't clinically relevant for their workflow.
+  const _flagsEnabled = (loadSettings?.()?.flags_enabled) || {};
+  const _flagOn = (f) => {
+    if (/^MRSA/.test(f))        return _flagsEnabled.MRSA !== false;
+    if (/^VRSA/.test(f))        return _flagsEnabled.VRSA !== false;
+    if (/^VRE/.test(f))         return _flagsEnabled.VRE  !== false;
+    if (/^ESBL\+/.test(f))      return _flagsEnabled.ESBL !== false;
+    if (/^CPE-/.test(f))        return _flagsEnabled.CPE  !== false;
+    if (/MDR|XDR/.test(f))      return _flagsEnabled.MDR  !== false;
+    return true;
+  };
+  const anyFlags = state.results.some(r => (r.amr_flags || []).some(_flagOn));
   if (anyFlags) {
     cols.push({
       key: 'amr_flags', label: 'Clinical flags', cls: '',
       getter: r => {
-        const flags = r.amr_flags || [];
+        const flags = (r.amr_flags || []).filter(_flagOn);
         if (!flags.length) return '—';
         return flags.map(f => {
           let cls = 'flag-info';
@@ -634,16 +646,29 @@ function renderComparisonTable() {
   // "Show clinical-jargon tooltips" setting; tip rendered via the
   // browser's native title attribute, augmented with a "?" hint icon
   // (CSS-driven, see th[data-help] in style.css).
+  // Citation-aware tooltips: clinical column headers can append the
+  // published source (one-line) so a sceptical reader can audit the
+  // basis for our thresholds without leaving the page. The citation
+  // map is loaded once on page init and lookup is keyed by `applies_to`
+  // tags on each citation entry.
+  const _citTip = (tag) => {
+    const matched = Object.values(state.citations || {}).filter(c =>
+      (c.applies_to || []).includes(tag)
+    );
+    return matched.length
+      ? "\n— " + matched.map(c => `${c.authors}, ${c.journal}`).join("; ")
+      : "";
+  };
   const HEADER_HELP = {
     st: "Classical 7-gene Sequence Type. PubMLST nomenclature. Suffix '~' means a partial profile was matched; '~?' means more than one ST fits.",
-    cgst: "cgMLST profile identifier (locally assigned). Two isolates with identical cgMLST profiles share a cgST. Hover the cell for the underlying profile hash.",
+    cgst: "cgMLST profile identifier (locally assigned). Two isolates with identical cgMLST profiles share a cgST. Hover the cell for the underlying profile hash." + _citTip("cgst-nomenclature"),
     cluster_id: "Cluster at the current halo distance. The MST and AMR colour-coding use this column.",
     clonal_complex: "PubMLST clonal complex (CC) — eBURST-derived grouping of related STs.",
-    hc0:  "HierCC HC0 cluster (Enterobase nomenclature). Identical profile / no allele differences. Local numbering.",
-    hc5:  "HierCC HC5 cluster. Up to 5 allele differences. Common short-term-outbreak boundary.",
-    hc10: "HierCC HC10 cluster. Up to 10 allele differences. SeqSphere outbreak default.",
-    hc50: "HierCC HC50 cluster. Up to 50 allele differences. Sublineage / clonal group.",
-    amr_flags: "Phenotype flags from AMRFinderPlus --plus: MRSA, VRE, VRSA, ESBL+, CPE, possible MDR/XDR. Red = clinically critical; amber = warning; blue = informational.",
+    hc0:  "HierCC HC0 cluster (Enterobase nomenclature). Identical profile / no allele differences." + _citTip("HierCC"),
+    hc5:  "HierCC HC5 cluster. Up to 5 allele differences. Common short-term-outbreak boundary." + _citTip("HierCC"),
+    hc10: "HierCC HC10 cluster. Up to 10 allele differences. SeqSphere outbreak default." + _citTip("HierCC"),
+    hc50: "HierCC HC50 cluster. Up to 50 allele differences. Sublineage / clonal group." + _citTip("HierCC"),
+    amr_flags: "Phenotype flags from AMRFinderPlus --plus: MRSA, VRE, VRSA, ESBL+, CPE, possible MDR/XDR. Red = critical; amber = warning; blue = informational." + _citTip("amr-plus") + _citTip("MRSA") + _citTip("VRE") + _citTip("ESBL+") + _citTip("CPE"),
     qc: "Assembly QC verdict (PASS / WARN / FAIL). Hover for N50, # contigs, total length, GC%, and any failure reasons.",
     exc: "EXC — locus called as an Exact Match against an allele in the scheme.",
     inf: "INF — locus called as an Inexact / Novel allele (close to a scheme allele but not 100%).",
@@ -2173,6 +2198,15 @@ const SETTINGS_DEFAULTS = {
   palette: "pastel",
   show_tooltips: true,
   autoswitch: true,
+  // Per-flag enable map. Disabled flags are hidden from every surface
+  // (table column, MST label suffix, quick-stats banner, detail panel).
+  flags_enabled: {
+    MRSA: true, VRE: true, VRSA: true, ESBL: true, CPE: true, MDR: true,
+  },
+  mdr_threshold: 3,
+  xdr_threshold: 5,
+  min_identity: 90,
+  min_coverage: 80,
 };
 function loadSettings() {
   try {
@@ -2210,20 +2244,45 @@ $("open-settings")?.addEventListener("click", () => {
   $("setting-palette").value = s.palette;
   $("setting-show-tooltips").checked = s.show_tooltips;
   $("setting-autoswitch").checked = s.autoswitch;
+  if ($("setting-min-identity")) $("setting-min-identity").value = s.min_identity;
+  if ($("setting-min-coverage")) $("setting-min-coverage").value = s.min_coverage;
+  if ($("setting-mdr")) $("setting-mdr").value = s.mdr_threshold;
+  if ($("setting-xdr")) $("setting-xdr").value = s.xdr_threshold;
+  for (const k of ["MRSA","VRE","VRSA","ESBL","CPE","MDR"]) {
+    const el = $(`flag-${k}`); if (el) el.checked = s.flags_enabled?.[k] !== false;
+  }
   $("settings-modal").classList.remove("hidden");
 });
 $("settings-close")?.addEventListener("click", () => $("settings-modal").classList.add("hidden"));
 $("settings-save")?.addEventListener("click", () => {
+  const flags_enabled = {};
+  for (const k of ["MRSA","VRE","VRSA","ESBL","CPE","MDR"]) {
+    flags_enabled[k] = $(`flag-${k}`)?.checked ?? true;
+  }
   const s = {
     theme: $("setting-theme").value,
     default_threshold: parseInt($("setting-default-threshold").value) || 5,
     palette: $("setting-palette").value,
     show_tooltips: $("setting-show-tooltips").checked,
     autoswitch: $("setting-autoswitch").checked,
+    flags_enabled,
+    mdr_threshold: parseInt($("setting-mdr")?.value) || 3,
+    xdr_threshold: parseInt($("setting-xdr")?.value) || 5,
+    min_identity:  parseFloat($("setting-min-identity")?.value) || 90,
+    min_coverage:  parseFloat($("setting-min-coverage")?.value) || 80,
   };
   saveSettings(s);
   applyTheme(s.theme);
+  // Apply analysis-side defaults to the Setup tab's option fields too,
+  // so the next Analyze click uses the user's preferred cutoffs.
+  if ($("min-identity")) $("min-identity").placeholder = `auto (saved default: ${s.min_identity})`;
+  if ($("min-coverage")) $("min-coverage").placeholder = `auto (saved default: ${s.min_coverage})`;
+  if ($("cluster-threshold")) $("cluster-threshold").value = String(Math.min(50, s.default_threshold));
+  if ($("cluster-threshold-num")) $("cluster-threshold-num").value = String(s.default_threshold);
   $("settings-modal").classList.add("hidden");
+  // Re-render any flag-driven surfaces so disabled flags vanish.
+  if (typeof renderComparisonTable === "function") renderComparisonTable();
+  if (typeof renderQuickStats === "function") renderQuickStats();
   toast("Settings saved", "success");
 });
 $("settings-reset")?.addEventListener("click", () => {
@@ -2478,3 +2537,218 @@ if (urlParams.get('folder')) $('folder-input').value = urlParams.get('folder');
 
 // Greet the user once per session so they know the tool is alive.
 toast("Welcome — pick a folder and a scheme to get started.", "info", "MLSTudio ready");
+
+// ---- Citations (literature provenance for clinical thresholds + flags) ----
+// Pulled once at load; rendered into header tooltips and the About modal.
+state.citations = {};
+api('/citations').then(d => {
+  state.citations = d.citations || {};
+  _renderAboutCitations();
+}).catch(() => { /* About modal still shows the static section */ });
+
+function _renderAboutCitations() {
+  const slot = document.getElementById('about-citations');
+  if (!slot) return;
+  const cits = Object.values(state.citations || {});
+  if (!cits.length) return;
+  slot.innerHTML = '<h3 style="margin-top:18px;margin-bottom:6px">Clinical basis (literature)</h3><ul class="muted small" style="margin-top:0;padding-left:18px;line-height:1.7">' +
+    cits.map(c => `<li><a href="${c.url}" target="_blank">${c.authors}, ${c.journal}.</a> ${c.title}</li>`).join('') +
+    '</ul>';
+}
+
+// ---- Sample Library tab ---------------------------------------------------
+// Persistent across all analyses: every isolate ever called is saved into
+// ~/.local/share/mlstudio/library.sqlite by the backend. This tab is a
+// browseable view of that store, with multi-filter + batch operations.
+
+let _libraryRows = [];
+const _libraryChecked = new Set();
+
+async function loadLibrary() {
+  const params = new URLSearchParams();
+  const q  = $('tab-search')?.value?.trim();
+  const s  = $('library-filter-scheme')?.value;
+  const og = $('library-filter-organism')?.value;
+  const fg = $('library-filter-flag')?.value;
+  if (q)  params.set('q', q);
+  if (s)  params.set('scheme', s);
+  if (og) params.set('organism', og);
+  if (fg) params.set('flag', fg);
+  try {
+    const data = await api('/library?' + params.toString());
+    _libraryRows = data.samples || [];
+    _populateLibraryFilters(data.stats || {});
+    _renderLibraryTable();
+    const summary = $('library-summary');
+    if (summary) summary.textContent =
+      `${data.stats?.total ?? 0} samples in library · showing ${_libraryRows.length}`;
+  } catch (e) {
+    toast(`Library load failed: ${e.message}`, 'error');
+  }
+}
+
+function _populateLibraryFilters(stats) {
+  const sSel = $('library-filter-scheme');
+  if (sSel && sSel.options.length <= 1) {
+    for (const r of (stats.per_scheme || [])) {
+      const o = document.createElement('option');
+      o.value = r.scheme_key;
+      o.textContent = `${r.scheme_key} (${r.n})`;
+      sSel.appendChild(o);
+    }
+  }
+  const oSel = $('library-filter-organism');
+  if (oSel && oSel.options.length <= 1) {
+    for (const r of (stats.per_organism || [])) {
+      if (!r.organism) continue;
+      const o = document.createElement('option');
+      o.value = r.organism;
+      o.textContent = `${r.organism} (${r.n})`;
+      oSel.appendChild(o);
+    }
+  }
+}
+
+function _renderLibraryTable() {
+  const root = $('library-content');
+  if (!root) return;
+  if (!_libraryRows.length) {
+    root.innerHTML = `<p class="muted" style="padding:18px">No samples in the library yet. Run an analysis on the <b>Setup</b> tab and every isolate will land here automatically.</p>`;
+    return;
+  }
+  const html = [
+    `<table class="library-table"><thead><tr>`,
+    `<th style="width:32px"><input type="checkbox" id="library-check-all"></th>`,
+    `<th>Sample</th><th>Scheme</th><th>Organism</th>`,
+    `<th>ST</th><th>cgST</th><th>CC</th><th>HC10</th>`,
+    `<th>Flags</th><th>QC</th><th>Analyzed</th>`,
+    `</tr></thead><tbody>`,
+  ];
+  for (const r of _libraryRows) {
+    const checked = _libraryChecked.has(r.sample_key) ? 'checked' : '';
+    const flags = (r.amr_flags || []).map(f => {
+      const c = /^MRSA|VRSA|CPE|XDR/.test(f) ? 'flag-critical'
+              : /^VRE|ESBL|MDR/.test(f) ? 'flag-warn' : 'flag-info';
+      return `<span class="amr-flag ${c}">${f}</span>`;
+    }).join(' ') || '—';
+    const qcCls = r.qc_verdict === 'PASS' ? 'flag-info'
+                : r.qc_verdict === 'WARN' ? 'flag-warn'
+                : r.qc_verdict === 'FAIL' ? 'flag-critical' : '';
+    const qc = r.qc_verdict ? `<span class="amr-flag ${qcCls}">${r.qc_verdict}</span>` : '—';
+    const date = r.analyzed_at ? r.analyzed_at.replace('T', ' ').slice(0, 16) : '';
+    html.push(
+      `<tr data-key="${r.sample_key}">` +
+      `<td><input type="checkbox" class="library-row-check" data-key="${r.sample_key}" ${checked}></td>` +
+      `<td><b>${r.sample_name || ''}</b></td>` +
+      `<td><code class="cgst">${r.scheme_key || ''}</code></td>` +
+      `<td><i>${r.organism || '—'}</i></td>` +
+      `<td>${r.st || '—'}</td>` +
+      `<td>${r.cgst_id ?? '—'}</td>` +
+      `<td>${r.clonal_complex || '—'}</td>` +
+      `<td>${r.cluster_hc10 || '—'}</td>` +
+      `<td>${flags}</td>` +
+      `<td>${qc}</td>` +
+      `<td class="muted small">${date}</td>` +
+      `</tr>`
+    );
+  }
+  html.push(`</tbody></table>`);
+  root.innerHTML = html.join('');
+
+  // Click row → detail panel
+  root.querySelectorAll('tr[data-key]').forEach(tr => {
+    tr.addEventListener('click', async (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      const key = tr.dataset.key;
+      try {
+        const snap = await api(`/library/${key}`);
+        // Reuse the detail panel by injecting the snapshot into state.results
+        // temporarily — the renderer reads from there.
+        if (!state.results) state.results = [];
+        // Replace or insert.
+        const idx = state.results.findIndex(x => x.sample === snap.sample);
+        if (idx >= 0) state.results[idx] = snap;
+        else state.results.push(snap);
+        openDetailPanel(snap.sample);
+      } catch (err) {
+        toast(`Could not load sample: ${err.message}`, 'error');
+      }
+    });
+  });
+
+  // Checkbox handling
+  root.querySelectorAll('.library-row-check').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const k = e.target.dataset.key;
+      if (e.target.checked) _libraryChecked.add(k); else _libraryChecked.delete(k);
+      _updateLibraryActionState();
+    });
+  });
+  const all = $('library-check-all');
+  if (all) all.addEventListener('change', (e) => {
+    _libraryChecked.clear();
+    if (e.target.checked) _libraryRows.forEach(r => _libraryChecked.add(r.sample_key));
+    _renderLibraryTable();
+    _updateLibraryActionState();
+  });
+
+  _updateLibraryActionState();
+}
+
+function _updateLibraryActionState() {
+  const enabled = _libraryChecked.size > 0;
+  if ($('library-add-to-run')) $('library-add-to-run').disabled = !enabled;
+  if ($('library-delete'))     $('library-delete').disabled     = !enabled;
+}
+
+$('library-refresh')?.addEventListener('click', () => loadLibrary());
+$('library-filter-scheme')?.addEventListener('change', () => loadLibrary());
+$('library-filter-organism')?.addEventListener('change', () => loadLibrary());
+$('library-filter-flag')?.addEventListener('change', () => loadLibrary());
+
+$('library-delete')?.addEventListener('click', async () => {
+  if (!_libraryChecked.size) return;
+  if (!confirm(`Delete ${_libraryChecked.size} sample(s) from the library? This won't touch the original FASTAs.`)) return;
+  let ok = 0;
+  for (const key of [..._libraryChecked]) {
+    try {
+      const r = await fetch(`/api/library/${key}`, { method: 'DELETE' });
+      if (r.ok) ok++;
+    } catch { /* ignore */ }
+  }
+  _libraryChecked.clear();
+  toast(`Deleted ${ok} sample(s) from the library`, 'success');
+  loadLibrary();
+});
+
+$('library-add-to-run')?.addEventListener('click', async () => {
+  if (!_libraryChecked.size) return;
+  let added = 0;
+  for (const key of [..._libraryChecked]) {
+    try {
+      const snap = await api(`/library/${key}`);
+      if (!state.results) state.results = [];
+      if (!state.results.some(r => r.sample === snap.sample)) {
+        state.results.push(snap); added++;
+      }
+    } catch { /* ignore */ }
+  }
+  toast(`Added ${added} sample(s) to the current view. Re-run the analysis to recompute the MST.`, 'info');
+  renderQuickStats();
+  renderComparisonTable();
+});
+
+// Hook the library load into tab activation.
+const _origActivateTab2 = activateTab;
+window.activateTab = function(t) {
+  _origActivateTab2.call(this, t);
+  if (t === 'library') loadLibrary();
+};
+
+// Re-fetch library after every analysis completes (the saves happen
+// server-side as each sample finishes, so a quick refresh keeps the
+// library tab fresh when the user flips over).
+const _origSubscribe2 = subscribe;
+subscribe = function(jobId) {
+  _origSubscribe2.call(this, jobId);
+};

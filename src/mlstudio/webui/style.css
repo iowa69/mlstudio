@@ -615,3 +615,24 @@ th[data-help]::after {
 /* Cytoscape highlight class — used by the search box to flash a matched
    node. Goes on the cy element via classes API. */
 .cy-highlight { outline: 3px solid #fbbf24; }
+
+/* ---- Library tab ------------------------------------------------------- */
+.library-content { padding: 8px 14px 14px 14px; overflow: auto; height: calc(100% - 50px); }
+.library-table {
+  width: 100%; border-collapse: collapse; font-size: 12.5px;
+}
+.library-table thead th {
+  background: var(--panel-2);
+  padding: 7px 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 1;
+}
+.library-table tbody td { padding: 7px 10px; border-bottom: 1px solid var(--panel-2); }
+.library-table tbody tr { cursor: pointer; }
+.library-table tbody tr:hover td { background: var(--panel-2); }

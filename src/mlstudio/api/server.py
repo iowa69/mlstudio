@@ -220,6 +220,16 @@ async def _run_job(job: Job) -> None:
 
                 if cached is not None:
                     job.results.append(cached)
+                    # Make sure cached results also flow into the library —
+                    # otherwise re-running on a folder full of cached samples
+                    # would never repopulate the library on a fresh sqlite.
+                    try:
+                        from mlstudio.library import save_sample
+                        save_sample(cached, folder=str(job.folder),
+                                    scheme_key=job.scheme_key,
+                                    organism=scheme.organism)
+                    except Exception as e:
+                        log.debug("library write skipped (cached) for %s: %s", sample.name, e)
                     job.message = f"[{i+1}/{len(samples)}] {sample.name} (cached)"
                     job.notify()
                     continue
@@ -362,6 +372,16 @@ async def _run_job(job: Job) -> None:
                     "input": _sample_to_dict(sample),
                 }
                 job.results.append(result_dict)
+                # Persist each result into the sample library so it can be
+                # browsed / re-loaded later. This is best-effort — a failed
+                # library write must never crash the analysis.
+                try:
+                    from mlstudio.library import save_sample
+                    save_sample(result_dict, folder=str(job.folder),
+                                scheme_key=job.scheme_key,
+                                organism=scheme.organism)
+                except Exception as e:
+                    log.debug("library write skipped for %s: %s", sample.name, e)
                 _save_cached_result(cache_dir, ck, result_dict)
         finally:
             executor.shutdown(wait=True)
@@ -416,6 +436,20 @@ async def _run_job(job: Job) -> None:
                 r["hier"] = hier_by_sample.get(r["sample"], {})
                 if r["sample"] in cgst_int_by_sample:
                     r["cgst_id"] = cgst_int_by_sample[r["sample"]]
+            # Library second-pass save: the per-sample save earlier wrote
+            # the result before the cgst_id / hier were known. Re-save now
+            # with the post-MST fields filled in so the library shows the
+            # cgST integer + HC10 cluster ID.
+            try:
+                from mlstudio.library import save_sample
+                for r in job.results:
+                    save_sample(r, folder=str(job.folder),
+                                scheme_key=job.scheme_key,
+                                organism=scheme.organism)
+                log.info("Library: re-saved %d samples with post-MST fields",
+                         len(job.results))
+            except Exception as e:
+                log.warning("Library second-pass save failed: %s", e)
         else:
             sname = next(iter(profiles.keys()))
             job.mst = {"elements": [{"data": {
@@ -663,6 +697,44 @@ def create_app() -> FastAPI:
         )
         job.distance_policy = policy
         return {"ok": True, "policy": policy, "mst": job.mst}
+
+    # ---- Citations (published basis for thresholds + clinical flags) ----
+    @app.get("/api/citations")
+    async def citations_list() -> dict[str, Any]:
+        """All literature references baked into the clinical interpretation."""
+        from mlstudio.citations import CITATIONS, citation_link
+        out: dict[str, Any] = {}
+        for k, c in CITATIONS.items():
+            out[k] = {**c, "url": citation_link(c)}
+        return {"citations": out}
+
+    # ---- Sample library (persistent per-isolate store) ------------------
+    @app.get("/api/library")
+    async def library_list(q: str | None = None, scheme: str | None = None,
+                           organism: str | None = None,
+                           flag: str | None = None, limit: int = 500) -> dict[str, Any]:
+        """List previously analyzed samples, newest first."""
+        from mlstudio.library import list_samples, stats
+        return {
+            "samples": list_samples(q=q, scheme=scheme, organism=organism,
+                                    flag=flag, limit=limit),
+            "stats": stats(),
+        }
+
+    @app.get("/api/library/{sample_key}")
+    async def library_get(sample_key: str) -> dict[str, Any]:
+        from mlstudio.library import get_sample
+        snap = get_sample(sample_key)
+        if not snap:
+            raise HTTPException(404, "Unknown sample_key")
+        return snap
+
+    @app.delete("/api/library/{sample_key}")
+    async def library_delete(sample_key: str) -> dict[str, Any]:
+        from mlstudio.library import delete_sample
+        if not delete_sample(sample_key):
+            raise HTTPException(404, "Unknown sample_key")
+        return {"ok": True}
 
     # ---- Projects (saved named runs) ------------------------------------
     @app.get("/api/projects")
