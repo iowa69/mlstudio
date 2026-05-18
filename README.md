@@ -8,30 +8,63 @@ Point it at a folder of assembled bacterial genomes, pick a scheme, and explore 
 
 ---
 
-## Screenshots
+## At a glance
 
-### 1. Welcome
-![Welcome](docs/screens/01_welcome_v6.png)
-The starting view. The sidebar walks you through five steps: pick a folder, pick a scheme, set options, run, and adjust the display.
+MLSTudio is organised around **five tabs** at the top of the workspace. The sidebar swaps in contextual controls per tab so the surface stays clean. Every screenshot below is taken from the 18-isolate *Enterococcus faecium* VRE-ST1478 demo panel (cgMLST.org scheme, 1 423 loci).
 
-### 2. Built-in folder browser
-![Folder browser](docs/screens/02_browse_v6.png)
-Click **Browse…** to navigate your filesystem from inside the browser — no need to type long paths. It tells you how many FASTA files are in each folder before you commit.
+### Setup tab — the guided workflow
+![Setup](docs/screens/01_setup_v7.png)
 
-### 2b. Searchable scheme catalog
-![Scheme catalog](docs/screens/02b_discover_v6.png)
-**Browse all PubMLST schemes…** live-queries PubMLST.org and BIGSdb-Pasteur (812 schemes the day this screenshot was taken). Filter by MLST / cgMLST / accessory; type to search across organism, scheme description, and database name. One click pulls the scheme into your local cache.
+The default landing page. A numbered checklist walks you through the four-step flow (folder → scheme → options → optional metadata → **Analyze**), and a second card summarises what each result tab will give you. The sidebar shows the input panels for those same four steps plus the **Re-run / Change-scheme / Reset** sticky-run actions.
 
-### 3. The minimum spanning tree
-![MST](docs/screens/03_mst_v6.png)
-A 67-isolate *Staphylococcus aureus* cgMLST tree (1716 loci). MSTs are centroid-free by definition — MLSTudio uses an `fcose` force-directed layout where **edge length is proportional to allele distance**, so visually close isolates really are genetically close. Nodes are colored by cluster, sample labels are always visible, and a default cluster halo highlights the closest pair.
+### Folder picker
+![Folder browser](docs/screens/02_browse_v7.png)
+Click **Browse…** to navigate your filesystem inside the browser. Each folder shows how many FASTA files it contains before you commit.
 
-### 4. Soft cluster halos
-![Cluster halos](docs/screens/04_clusters_v6.png)
-Slide the **cluster halo distance** up and outbreak-style groups appear as soft pastel halos that follow the actual cluster shape — not bounding boxes — labeled **Cluster 1, Cluster 2, …**. The halo is painted on a canvas overlay (fat blurred fills around member nodes + their interconnecting edges), so it pans and zooms smoothly with the tree. Identical genotypes collapse into a single pie-chart node sized by member count.
+### Scheme catalog
+![Scheme catalog](docs/screens/02b_discover_v7.png)
+**Browse all PubMLST schemes…** live-queries PubMLST.org + BIGSdb-Pasteur + cgMLST.org. Filter by MLST / cgMLST / accessory; type to search across organism, scheme description, and database name. One click pulls the scheme into your local cache.
 
-### 5. Results table
-Per-isolate Sequence Types, per-locus allele calls, EXC/INF/LNF flags, and free-text notes. Scrollable, sortable, and exported alongside the tree.
+### MST tab — the interactive minimum-spanning tree
+![MST](docs/screens/03_mst_v7.png)
+Edge length is proportional to allele distance, so visually close isolates really are genetically close. Drag any node to pin it (border turns amber), wheel-zoom, right-click-drag to pan, or use the floating **+ / % / −** zoom dial in the corner. Identical genotypes auto-collapse into a single pie-chart node sized by member count.
+
+### MST tab — cluster halos
+![Cluster halos](docs/screens/04_clusters_v7.png)
+Slide the **cluster halo distance** up and outbreak-style groups appear as translucent coloured halos that hug the actual cluster shape (the union of soft circles around member nodes plus the connecting edges), with crisp pill labels on top. Isolates not in any cluster stay neutral grey so the eye goes to the real groups. The slider caps at 50 alleles (the cgMLST sweet spot); the numeric input next to it accepts arbitrarily larger values.
+
+### Table tab — the comparison table
+![Comparison table](docs/screens/05_table_v7.png)
+One row per sample with ST, cluster ID, EXC / INF / LNF counts, AMR genes, and the full per-locus allele matrix (toggle **Show every locus** for big schemes). Rows are tinted by cluster colour so outbreak groups are readable without opening the tree. **Export TSV** always writes the full per-locus matrix regardless of on-screen filtering.
+
+### AMR tab — sample × gene matrix
+![AMR matrix](docs/screens/06_amr_v7.png)
+AMRFinderPlus hits as a dense sample-by-gene grid. Cell colour encodes calling method: **green** for EXACT, **lime** for BLAST, **amber** for PARTIAL. Filter by element type (AMR / stress / virulence), by calling method, or by gene-name substring (`blaCTX-M`, `mecA`, `vanA`, …). **AMR results never feed the MST distance** — they are displayed alongside typing only.
+
+### Statistics tab
+![Statistics](docs/screens/07_stats_v7.png)
+Per-sample call quality (EXC / INF / LNF distribution), per-locus call rate, cluster size distribution, AMR gene frequency. Useful as the first artifact to share when discussing a run.
+
+---
+
+## Working with the tabs
+
+Every analysis lives inside one project, and you move between five tabs depending on what you want to look at next. The **sidebar swaps automatically** to match — controls that only matter for the tree (cluster halo distance, layout algorithm, node-size scale) disappear when you flip to the Table tab, and the **AMR Filters / Statistics view** panels appear when you flip into those tabs.
+
+| Tab | What you do here | Sidebar controls |
+|-----|------------------|------------------|
+| **Setup** | Pick the input folder, the scheme, options (threads / identity / coverage / AMR / fastp). Optional metadata CSV. Click ▶ Analyze. | Input folder · Scheme · Options · Metadata · Scheme catalog · Run / Re-run / Change-scheme / Reset |
+| **MST** | Interactive minimum spanning tree. Drag nodes, zoom, click the **Cluster halo distance** slider to find outbreak groups, switch **Color nodes by** to a metadata field, tune layout. | Metadata · Distance (missing-data policy) · MST display (color, halos, layout algorithm, node / label / edge size, export PNG/SVG) |
+| **Table** | Per-sample ST + per-locus allele matrix, cluster-tinted rows. **Show every locus** toggle. **Export TSV** dumps everything. | Metadata · Table controls (color-by mirror, search, full-locus toggle, TSV export) |
+| **AMR** | AMRFinderPlus hits as a sample × gene matrix. Cell colour encodes calling method. AMR never affects the MST. | AMR filters (element type, calling method, gene-name search) · Export AMR TSV |
+| **Statistics** | Call-quality histograms, cluster size distribution, AMR gene frequency. | Statistics view (overview / quality / loci / clusters) |
+
+A finished analysis switches you to the **MST** tab automatically. From there you can:
+
+1. Drag the **Cluster halo distance** slider until the outbreak clusters you care about light up. The number on each edge is the allele distance.
+2. Drop a metadata CSV (sidebar → Metadata) and change **Color nodes by** to a column — wards, dates, phenotypes, anything. The same field also drives the row tinting on the Table tab and the legend.
+3. Flip to the **AMR** tab to see resistance genotypes — vanA / vanB for VRE, mecA / mecC for MRSA, the carbapenemase family for CRE.
+4. **Save current as project…** in the Projects panel stores the whole run (`.local/share/mlstudio/projects/<name>/` — manifest, MST, results, metadata, AMR) so you can reload it later in section 0 of the sidebar.
 
 ---
 
