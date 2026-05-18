@@ -326,7 +326,7 @@ def call_cgmlst(
     if scheme.profile_table and scheme.profile_table.exists() and missing == 0:
         try:
             from mlstudio.calling.mlst import _load_profile_table
-            loci_order, profile_lookup = _load_profile_table(scheme)
+            loci_order, profile_lookup, _cc = _load_profile_table(scheme)
             tup = tuple(re.sub(r"[^\d]", "", result.calls[loc].allele or "0")
                         for loc in loci_order)
             if "0" not in tup:

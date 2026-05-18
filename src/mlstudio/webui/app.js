@@ -484,19 +484,40 @@ function renderComparisonTable() {
   const colorField = $('color-field').value;
   const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id');
 
-  // Show cgST whenever any sample carries one (i.e. cgMLST runs). The ST
-  // column is the classical 7-gene MLST result; cgST is the stable hash of
-  // the cgMLST allele profile, so identical profiles share a cgST.
+  // Typing columns: ST (with clonal-complex tag when available), cgST
+  // (cgMLST profile hash), HierCC HC{0,2,5,10,25,50} cluster IDs, and the
+  // local cluster ID from the current halo threshold. Each column appears
+  // only if any sample carries that data — keeps the table tight on a
+  // pure-MLST run.
   const anyCgst = state.results.some(r => r.cgst);
+  const anyCc   = state.results.some(r => r.clonal_complex);
+  const anyHier = state.results.some(r => r.hier && Object.keys(r.hier).length);
   const cols = [
     { key: 'sample', label: 'Sample', cls: '', getter: r => r.sample },
-    { key: 'st', label: 'ST', cls: '', getter: r => r.st || '—' },
+    {
+      key: 'st', label: 'ST', cls: '',
+      getter: r => {
+        if (!r.st) return '—';
+        const cc = r.clonal_complex ? ` <span class="cc-tag">${r.clonal_complex}</span>` : '';
+        return r.st + cc;
+      },
+    },
   ];
   if (anyCgst) {
     cols.push({
       key: 'cgst', label: 'cgST', cls: '',
       getter: r => r.cgst ? `<code class="cgst">${r.cgst}</code>` : '—',
     });
+  }
+  if (anyHier) {
+    // Show the most commonly useful HierCC levels — HC10 is the SeqSphere
+    // outbreak default; HC50 catches sublineages; HC0 is identical-profile.
+    for (const hc of ['HC0', 'HC5', 'HC10', 'HC50']) {
+      cols.push({
+        key: hc.toLowerCase(), label: hc, cls: '',
+        getter: r => r.hier?.[hc] || '—',
+      });
+    }
   }
   cols.push({
     key: 'cluster_id', label: 'Cluster',
@@ -1047,13 +1068,18 @@ function renderMst() {
   const initialField = $('color-field').value || 'st';
   state.currentPalette = paletteFor(state.mst.elements, initialField);
 
-  // Build a lookup: sample → "[ST X]" or "[cgST Y]" so the node label
-  // carries the typing result inline. Prefer the classical ST when present
-  // (more familiar to clinicians); fall back to the cgST hash otherwise.
+  // Build a lookup: sample → "[ST X · CC17]" or "[cgST Y]" so the node
+  // label carries the typing result inline. Prefer the classical ST when
+  // present (more familiar to clinicians); fall back to the cgST hash
+  // otherwise. Clonal complex annotation is appended when available.
   const typeSuffix = {};
   for (const r of (state.results || [])) {
-    if (r.st) typeSuffix[r.sample] = ` [ST ${r.st}]`;
-    else if (r.cgst) typeSuffix[r.sample] = ` [cgST ${r.cgst}]`;
+    if (r.st) {
+      const cc = r.clonal_complex ? ` · ${r.clonal_complex}` : '';
+      typeSuffix[r.sample] = ` [ST ${r.st}${cc}]`;
+    } else if (r.cgst) {
+      typeSuffix[r.sample] = ` [cgST ${r.cgst}]`;
+    }
   }
   const elements = state.mst.elements.map(el => {
     if (!el.data.source) {
@@ -1696,7 +1722,13 @@ $('export-tsv-btn')?.addEventListener('click', () => {
   const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id' && f !== 'st');
   const includeAmr = state.amr_results && Object.values(state.amr_results).some(h => h?.length);
   const includeCgst = state.results.some(r => r.cgst);
-  const header = ['sample', 'st', ...(includeCgst ? ['cgst'] : []),
+  const includeCc   = state.results.some(r => r.clonal_complex);
+  const includeHier = state.results.some(r => r.hier && Object.keys(r.hier).length);
+  const hcCols = includeHier ? ['hc0','hc2','hc5','hc10','hc25','hc50'] : [];
+  const header = ['sample', 'st',
+                  ...(includeCc ? ['clonal_complex'] : []),
+                  ...(includeCgst ? ['cgst'] : []),
+                  ...hcCols,
                   'cluster_id', 'exc', 'inf', 'lnf', 'notes',
                   ...(includeAmr ? ['amr_genes'] : []),
                   ...metaCols, ...loci];
@@ -1720,7 +1752,9 @@ $('export-tsv-btn')?.addEventListener('click', () => {
                              .map(h => h.gene_symbol).filter(Boolean))).join(';')
       : null;
     rows.push([r.sample, r.st ?? '',
+               ...(includeCc ? [r.clonal_complex ?? ''] : []),
                ...(includeCgst ? [r.cgst ?? ''] : []),
+               ...hcCols.map(hc => r.hier?.[hc.toUpperCase()] ?? ''),
                cluster, exc, inf, lnf,
                (r.notes || []).join(' | '),
                ...(includeAmr ? [amrGenes] : []),

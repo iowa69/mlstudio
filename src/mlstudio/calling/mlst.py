@@ -70,6 +70,10 @@ class MLSTResult:
     # scheme key and its ST land here so the GUI can show both.
     mlst_scheme: str | None = None
     mlst_st: str | None = None
+    # PubMLST clonal complex annotation for the resolved ST (e.g. "CC17"
+    # for Efaecium ST1478). Empty when the scheme's profile table doesn't
+    # carry a CC column or no ST was assigned.
+    clonal_complex: str | None = None
 
     def allele_vector(self, loci_order: list[str]) -> list[str | None]:
         """Return allele numbers in scheme order; None for missing."""
@@ -195,25 +199,56 @@ def _best_hit(hits: list[dict], locus: str,
                       candidates=candidates)
 
 
-def _load_profile_table(scheme: Scheme) -> tuple[list[str], dict[tuple[str, ...], str]]:
-    """Parse profiles.tsv; return (locus_order, {tuple_of_alleles: ST})."""
+def _attach_cc(result: MLSTResult, cc_of: dict[str, str]) -> None:
+    """Set result.clonal_complex from the ST→CC lookup, stripping the
+    `~` / `~?` / `*` suffixes the fuzzy lookup may add to result.st."""
+    if not result.st:
+        return
+    bare = result.st.rstrip("*~?")
+    cc = cc_of.get(bare)
+    if cc:
+        result.clonal_complex = cc
+        result.notes.append(f"clonal complex: {cc}")
+
+
+def _load_profile_table(
+    scheme: Scheme,
+) -> tuple[list[str], dict[tuple[str, ...], str], dict[str, str]]:
+    """Parse profiles.tsv; return (locus_order, {alleles → ST}, {ST → clonal_complex}).
+
+    PubMLST profile tables typically carry a `clonal_complex` column (and
+    sometimes `species`, `country`, etc.) that we surface alongside the ST.
+    For schemes that omit the column the mapping is just empty.
+    """
     if scheme.profile_table is None or not scheme.profile_table.exists():
         raise FileNotFoundError(f"No profile table for scheme {scheme.name}")
 
     lines = scheme.profile_table.read_text().splitlines()
     header = lines[0].split("\t")
     st_idx = header.index("ST")
-    # Use the locus order from the scheme manifest (matches BIGSdb order)
     loc_idx = [header.index(loc) for loc in scheme.loci]
+    # Optional clonal-complex column. PubMLST uses lowercase
+    # "clonal_complex"; older Pasteur schemes use "CC".
+    cc_idx: int | None = None
+    for cand in ("clonal_complex", "CC", "Clonal_Complex"):
+        if cand in header:
+            cc_idx = header.index(cand)
+            break
 
     table: dict[tuple[str, ...], str] = {}
+    cc_of: dict[str, str] = {}
     for line in lines[1:]:
         if not line.strip():
             continue
         cols = line.split("\t")
         key = tuple(cols[i] for i in loc_idx)
-        table[key] = cols[st_idx]
-    return scheme.loci, table
+        st = cols[st_idx]
+        table[key] = st
+        if cc_idx is not None and cc_idx < len(cols):
+            cc = cols[cc_idx].strip()
+            if cc:
+                cc_of[st] = cc
+    return scheme.loci, table, cc_of
 
 
 def call_mlst(
@@ -230,7 +265,7 @@ def call_mlst(
 
     db_root = db_root or (scheme.root / "blast_db")
     locus_dbs = _build_locus_dbs(scheme, db_root)
-    loci_order, profile_lookup = _load_profile_table(scheme)
+    loci_order, profile_lookup, cc_of = _load_profile_table(scheme)
 
     sample = assembly.stem.replace(".fna", "").replace(".fasta", "").replace(".fa", "")
     result = MLSTResult(sample=sample, scheme=scheme.name, st=None)
@@ -339,4 +374,5 @@ def call_mlst(
             result.notes.append("missing allele(s) — no ST assigned")
         else:
             result.notes.append("novel allele combination — no matching ST")
+    _attach_cc(result, cc_of)
     return result

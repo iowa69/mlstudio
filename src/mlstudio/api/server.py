@@ -236,9 +236,16 @@ async def _run_job(job: Job) -> None:
                         result.mlst_scheme = mlst_companion.name
                         result.mlst_st = mlst_res.st
                         result.st = mlst_res.st            # primary ST column
+                        # Pull clonal complex through from the companion
+                        # MLST run if it found one — otherwise the cgMLST
+                        # result has no CC info.
+                        if mlst_res.clonal_complex:
+                            result.clonal_complex = mlst_res.clonal_complex
                         result.notes.append(
                             f"MLST ({mlst_companion.name}): "
                             f"ST {mlst_res.st or '?'}"
+                            + (f" / {mlst_res.clonal_complex}"
+                               if mlst_res.clonal_complex else "")
                         )
                     except Exception as e:
                         log.warning("Companion MLST failed for %s: %s", sample.name, e)
@@ -309,6 +316,7 @@ async def _run_job(job: Job) -> None:
                     "cgst": result.cgst,
                     "mlst_st": result.mlst_st,
                     "mlst_scheme": result.mlst_scheme,
+                    "clonal_complex": result.clonal_complex,
                     "calls": {loc: asdict(c) for loc, c in result.calls.items()},
                     "notes": result.notes,
                     "input": _sample_to_dict(sample),
@@ -342,6 +350,15 @@ async def _run_job(job: Job) -> None:
                 members_by_rep=members_by_rep,
                 non_tree_pairs=nt_pairs,
             )
+            # HierCC-style hierarchical cluster IDs (Enterobase nomenclature).
+            # For each Enterobase-style threshold {0, 2, 5, 10, 25, 50}, find
+            # connected components on the complete pairwise-distance graph and
+            # number them by size desc. Attach to each sample's result so the
+            # Table tab can render HC0/HC2/HC5/HC10/HC25/HC50 columns.
+            hier_thresholds = [0, 2, 5, 10, 25, 50]
+            hier_by_sample = _hier_clusters(dm, members_by_rep, hier_thresholds)
+            for r in job.results:
+                r["hier"] = hier_by_sample.get(r["sample"], {})
         else:
             sname = next(iter(profiles.keys()))
             job.mst = {"elements": [{"data": {
@@ -862,6 +879,57 @@ def _load_cached_result(cache_dir: Path, key: str) -> dict[str, Any] | None:
 def _save_cached_result(cache_dir: Path, key: str, result: dict[str, Any]) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / f"{key}.json").write_text(json.dumps(result))
+
+
+def _hier_clusters(
+    dm: Any,
+    members_by_rep: dict[str, list[str]],
+    thresholds: list[int],
+) -> dict[str, dict[str, str]]:
+    """Compute HierCC-style cluster IDs per sample at multiple thresholds.
+
+    For each threshold, build a graph over the merged-profile representatives
+    where an edge connects two reps iff their allele distance ≤ threshold.
+    Connected components are the clusters; they are numbered by size desc
+    (then by min sample ID) so the largest cluster at every level is "1".
+    Identical-profile groups inherit their rep's cluster ID at every level.
+
+    Returns `{sample: {"HC0": "1", "HC2": "1", "HC5": "1", …}}`.
+    """
+    if dm is None or dm.n == 0:
+        return {}
+    samples = list(dm.samples)
+    out: dict[str, dict[str, str]] = {s: {} for rep in members_by_rep for s in members_by_rep[rep]}
+    def _find(parent: dict[str, str], x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for th in thresholds:
+        # Union-find: connect reps whose pairwise distance ≤ threshold.
+        parent = {s: s for s in samples}
+        for i in range(dm.n):
+            for j in range(i + 1, dm.n):
+                if int(dm.matrix[i, j]) <= th:
+                    a, b = _find(parent, samples[i]), _find(parent, samples[j])
+                    if a != b:
+                        parent[a] = b
+        groups: dict[str, list[str]] = {}
+        for s in samples:
+            groups.setdefault(_find(parent, s), []).append(s)
+        # Numbering: largest cluster first, ties broken by min sample id.
+        ordered = sorted(groups.values(), key=lambda g: (-len(g), min(g)))
+        rep_to_id: dict[str, str] = {}
+        for idx, grp in enumerate(ordered, start=1):
+            for rep in grp:
+                rep_to_id[rep] = str(idx)
+        # Expand reps back to all original samples sharing that rep.
+        for rep, members in members_by_rep.items():
+            cid = rep_to_id.get(rep, "?")
+            for s in members:
+                out[s][f"HC{th}"] = cid
+    return out
 
 
 def _merge_identical(
