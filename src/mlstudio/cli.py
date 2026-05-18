@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import socket
 import sys
 import webbrowser
@@ -128,7 +127,7 @@ def schemes_pull(
     else:
         # Fall through to cgMLST.org. Accept either the bare slug ("Efaecium")
         # or the local cache key ("efaecium_cgmlst_orgio").
-        from mlstudio.schemes.cgmlst_org import pull_cgmlst_org_scheme, load_registry
+        from mlstudio.schemes.cgmlst_org import load_registry, pull_cgmlst_org_scheme
         slug = key
         if key.endswith("_cgmlst_orgio"):
             slug_lower = key[: -len("_cgmlst_orgio")]
@@ -185,7 +184,7 @@ def schemes_pull_eskapee(
             scheme = pull_cgmlst_org_scheme(slug=slug, organism=organism, force=force)
             console.print(f"  [green]✓[/green] {len(scheme.loci)} loci cached at {scheme.root}")
             ok.append(slug)
-        except Exception as e:  # noqa: BLE001 — surface every failure mode
+        except Exception as e:
             console.print(f"  [red]✗[/red] {e}")
             fail.append((slug, str(e)))
             if not skip_failures:
@@ -267,7 +266,7 @@ def call_cgmlst_cmd(
     """Call cgMLST on a single assembly (prodigal → BLAST workflow)."""
     from mlstudio.calling.cgmlst import call_cgmlst as _call_cgmlst
     from mlstudio.schemes import Scheme
-    from mlstudio.schemes.bigsdb import cache_root, REGISTRY
+    from mlstudio.schemes.bigsdb import REGISTRY, cache_root
 
     # Schemes come from three places: the BIGSdb / PubMLST registry, the
     # cgMLST.org client, and the local ad-hoc builder. The first lives in

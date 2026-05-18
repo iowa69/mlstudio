@@ -69,7 +69,14 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "RUF"]
-ignore = ["E501"]
+ignore = [
+    "E501",   # line too long — soft 100 cap is enough
+    "B904",   # `raise … from err` — stylistic; many of ours re-raise with a clean message
+    "B008",   # function-call-in-default — typer.Option/Argument require it
+    "RUF002", # ambiguous unicode in docstrings — em-dashes are intentional
+    "RUF003", # ambiguous unicode in comments — em-dashes are intentional
+    "RUF006", # asyncio dangling task — fire-and-forget websocket pushes are intentional
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

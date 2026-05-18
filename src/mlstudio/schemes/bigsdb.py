@@ -75,7 +75,7 @@ class BigsdbClient:
         self.host = host.rstrip("/")
         self._client = httpx.Client(timeout=timeout, follow_redirects=True)
 
-    def __enter__(self) -> "BigsdbClient":
+    def __enter__(self) -> BigsdbClient:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -194,7 +194,7 @@ async def _pull_scheme_async(ref: SchemeRef, root: Path, concurrency: int = 20) 
                     )
 
         tasks = []
-        for i, locus in enumerate(loci):
+        for _i, locus in enumerate(loci):
             url = f"{ref.host}/api/db/{ref.database}/loci/{locus}/alleles_fasta"
             target = loci_dir / f"{locus}.fasta"
             if target.exists() and target.stat().st_size > 0:
@@ -205,7 +205,7 @@ async def _pull_scheme_async(ref: SchemeRef, root: Path, concurrency: int = 20) 
         if tasks:
             log.info("Pulling %d loci (concurrency=%d)…", len(tasks), concurrency)
             results = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
-            for (locus, _), res in zip(tasks, results):
+            for (locus, _), res in zip(tasks, results, strict=False):
                 if isinstance(res, Exception):
                     log.error("Failed locus %s: %s", locus, res)
                 else:
@@ -293,7 +293,7 @@ def _classify_scheme(description: str, db: str) -> str:
     d = description.lower()
     if "cgmlst" in d:
         return "cgmlst"
-    if d == "mlst" or "mlst" in d and "cgmlst" not in d and "core" not in d:
+    if d == "mlst" or ("mlst" in d and "cgmlst" not in d and "core" not in d):
         return "mlst"
     if "virulence" in d or "resistance" in d or "accessory" in d:
         return "accessory"

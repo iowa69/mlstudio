@@ -82,7 +82,7 @@ def hamming_matrix(
                     if a != b:
                         d += 1
             if policy == "scaled" and shared > 0 and n_loci > 0:
-                d = int(round(d * n_loci / shared))
+                d = round(d * n_loci / shared)
             if policy == "pairwise_complete" and shared == 0:
                 d = n_loci if n_loci > 0 else 1
             mat[i, j] = d

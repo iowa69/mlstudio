@@ -74,7 +74,8 @@ def pull_cgmlst_org_scheme(
             buf = io.BytesIO()
             total = 0
             for chunk in r.iter_bytes(chunk_size=1 << 20):
-                buf.write(chunk); total += len(chunk)
+                buf.write(chunk)
+                total += len(chunk)
             log.info("  downloaded %.1f MB", total / 1e6)
             buf.seek(0)
         zf = zipfile.ZipFile(buf)

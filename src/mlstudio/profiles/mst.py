@@ -17,7 +17,7 @@ from mlstudio.profiles.distance import DistanceMatrix
 
 def build_mst(dm: DistanceMatrix) -> nx.Graph:
     g = nx.Graph()
-    for i, s in enumerate(dm.samples):
+    for s in dm.samples:
         g.add_node(s)
     for i in range(dm.n):
         for j in range(i + 1, dm.n):
@@ -65,7 +65,7 @@ def mst_to_cytoscape(
             "members": members,
             "size": len(members),
         }
-        if node in st_by_sample and st_by_sample[node]:
+        if st_by_sample.get(node):
             data["st"] = st_by_sample[node]
         data["cluster_id"] = f"C{cluster_id.get(node, 0)}"
         if node in metadata:

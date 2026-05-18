@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -19,30 +20,35 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mlstudio import __version__
-import hashlib
-import dataclasses
-
 from mlstudio.amr.amrfinderplus import ORGANISM_MAP, amrfinder_available, run_amrfinderplus
 from mlstudio.calling.cgmlst import call_cgmlst
 from mlstudio.calling.fastp_wrapper import run_fastp
-from mlstudio.calling.mlst import call_mlst, MLSTResult, AlleleCall
+from mlstudio.calling.mlst import call_mlst
 from mlstudio.io.scanner import Sample, scan
 from mlstudio.profiles.distance import hamming_matrix
 from mlstudio.profiles.mst import build_mst, mst_to_cytoscape
 from mlstudio.schemes import Scheme
 from mlstudio.schemes.bigsdb import (
-    REGISTRY, AuthRequiredError, BigsdbClient, SchemeRef, _classify_scheme,
-    cache_root, discover_remote_schemes, list_local, pull_scheme,
+    REGISTRY,
+    AuthRequiredError,
+    SchemeRef,
+    _classify_scheme,
+    cache_root,
+    discover_remote_schemes,
+    list_local,
+    pull_scheme,
 )
 from mlstudio.schemes.cgmlst_org import (
     load_registry as load_cgmlst_org_registry,
+)
+from mlstudio.schemes.cgmlst_org import (
     pull_cgmlst_org_scheme,
 )
 
 log = logging.getLogger(__name__)
 
 # In-memory job/result store. For v1 this is plenty; persistence comes later.
-JOBS: dict[str, "Job"] = {}
+JOBS: dict[str, Job] = {}
 
 
 def projects_root() -> Path:
@@ -618,9 +624,12 @@ def create_app() -> FastAPI:
         exc = inf = lnf = 0
         for r in job.results:
             for c in r["calls"].values():
-                if c["flag"] == "EXC": exc += 1
-                elif c["flag"] == "INF": inf += 1
-                elif c["flag"] == "LNF": lnf += 1
+                if c["flag"] == "EXC":
+                    exc += 1
+                elif c["flag"] == "INF":
+                    inf += 1
+                elif c["flag"] == "LNF":
+                    lnf += 1
         nloci = len(job.scheme_loci)
         return {
             "n_samples": n,

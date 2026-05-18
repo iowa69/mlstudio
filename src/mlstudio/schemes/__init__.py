@@ -43,7 +43,7 @@ class Scheme:
         return self.loci_dir / f"{locus}.fasta"
 
     @classmethod
-    def from_dir(cls, root: Path) -> "Scheme":
+    def from_dir(cls, root: Path) -> Scheme:
         import json
 
         manifest = json.loads((root / "manifest.json").read_text())
