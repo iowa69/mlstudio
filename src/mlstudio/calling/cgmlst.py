@@ -1,25 +1,35 @@
-"""Core-genome MLST calling via a single concatenated BLAST database.
+"""Core-genome MLST calling: prodigal CDS prediction + batched BLAST.
 
-For large schemes (1000+ loci) running one BLAST per locus is prohibitive. Instead
-we concatenate every allele FASTA into one DB whose subject IDs are
-`<locus>__<allele>`, then run one `blastn` per genome and group the hits by locus.
+The naive "BLAST the whole assembly against a concatenated allele DB" approach
+breaks on real cgMLST schemes because individual loci can have 4 000+ allelic
+variants. With 100 loci per batch DB that's 100 000+ subject sequences, and
+BLAST's `-max_target_seqs` cap (which is applied early during preliminary
+alignment, not as a final filter) gets fully saturated by hits to one or two
+hyper-variable loci. The other 98 loci in the batch return zero alignments
+and are silently marked LNF.
 
-Per locus we keep the highest-bitscore hit that meets identity + coverage cutoffs.
-An exact match yields the allele number; an inexact pass yields `<allele>~` (INF).
-LNF = locus not found in the assembly above thresholds.
+The chewBBACA-style fix is to flip the problem on its head: run prodigal once
+per assembly to extract the ~5 000 predicted coding sequences, then BLAST
+each CDS (a short, clean ORF) against the batched DBs. Each CDS naturally
+hits at most one locus' alleles, so `-max_target_seqs` per query is more than
+enough and no locus is silently dropped.
+
+CDS predictions are cached per-assembly (keyed by size + mtime) under
+`<scheme_root>/cds_cache/<sample>.cds.fna`, so subsequent runs against the
+same input are instant.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import multiprocessing as mp
 import re
 import subprocess
 from collections import defaultdict
-from dataclasses import dataclass, field
 from pathlib import Path
 
-from mlstudio.calling.mlst import AlleleCall, MLSTResult, make_blastdb
+from mlstudio.calling.mlst import AlleleCall, MLSTResult
 from mlstudio.schemes import Scheme
 
 log = logging.getLogger(__name__)
@@ -28,17 +38,60 @@ log = logging.getLogger(__name__)
 # is intentionally low (80%) because cgMLST loci frequently land at contig
 # boundaries in fragmented assemblies, so a fully-conserved allele with the
 # tail truncated by the contig break should still be called (it'll be flagged
-# INF if identity slips below 100%). 90/90 was too strict and caused 95%+
-# LNF on real-world data; this matches the chewBBACA / pyMLST consensus.
+# INF if identity slips below 100%). 90/90 was too strict for real-world data.
 DEFAULT_IDENTITY = 90.0
 DEFAULT_COVERAGE = 80.0
 LOCUS_SEP = "__"
-# Loci per BLAST DB batch. Big enough that the per-batch BLAST call has
-# meaningful work; small enough that -max_target_seqs comfortably covers
-# 1 hit per locus × ~50 alleles avg per locus = 5000 hits per batch.
-BATCH_SIZE = 100
-MAX_HITS_PER_BATCH = 8000
 
+# Loci per BLAST DB batch. With CDS queries (rather than the whole assembly)
+# each batch returns a handful of hits per query, so we can keep the batch
+# size reasonably large without hitting -max_target_seqs saturation.
+BATCH_SIZE = 200
+
+# Per-CDS-query cap inside one BLAST call. Each CDS realistically matches
+# alleles of one locus only, so 50 is generous.
+MAX_HITS_PER_QUERY = 50
+
+
+# ---------------------------------------------------------------------------
+# Step 1 — prodigal CDS prediction (cached per assembly)
+# ---------------------------------------------------------------------------
+
+def _cache_key(assembly: Path) -> str:
+    st = assembly.stat()
+    return hashlib.sha1(
+        f"{assembly.resolve()}:{st.st_size}:{int(st.st_mtime)}".encode()
+    ).hexdigest()[:16]
+
+
+def predict_cds(assembly: Path, cache_root: Path) -> Path:
+    """Run prodigal in single-genome mode and cache the predicted CDS FASTA.
+
+    Returns the path to the predicted-CDS nucleotide FASTA. Re-runs are
+    skipped when the cached file matches the assembly's size + mtime.
+    """
+    cache_root.mkdir(parents=True, exist_ok=True)
+    key = _cache_key(assembly)
+    out = cache_root / f"{assembly.stem}.{key}.cds.fna"
+    if out.exists() and out.stat().st_size > 0:
+        log.info("Reusing cached CDS predictions at %s", out)
+        return out
+
+    log.info("Predicting CDS with prodigal on %s…", assembly.name)
+    # `-p single` is the right mode for bacterial WGS assemblies; the
+    # alternative `-p meta` is for metagenomes. `-q` suppresses the noisy
+    # banner; we throw away the .gff translation file (`-f gff -o /dev/null`).
+    subprocess.run(
+        ["prodigal", "-i", str(assembly), "-d", str(out),
+         "-o", "/dev/null", "-f", "gff", "-p", "single", "-q"],
+        check=True, capture_output=True,
+    )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Step 2 — batched allele-DB construction (reused across all samples)
+# ---------------------------------------------------------------------------
 
 def _write_locus_batch(scheme: Scheme, batch_loci: list[str], fa_path: Path) -> None:
     """Concatenate a chunk of locus FASTAs with rewritten headers (locus__allele)."""
@@ -61,31 +114,42 @@ def _write_locus_batch(scheme: Scheme, batch_loci: list[str], fa_path: Path) -> 
 
 def build_concat_db(scheme: Scheme, db_root: Path | None = None,
                     batch_size: int = BATCH_SIZE) -> list[Path]:
-    """Build BATCH-SIZED BLAST databases.
+    """Build batched BLAST databases of the scheme's alleles.
 
     Returns the list of batch FASTA paths (the corresponding BLAST DBs live
-    next to them, indexed by makeblastdb). Splitting the scheme into 100-locus
-    chunks keeps BLAST's per-call memory + output bounded: one big DB with
-    millions of alleles makes -max_target_seqs saturate on a single
-    high-diversity locus, and removes the cap means BLAST allocates GBs of
-    state. A handful of small batches is far easier on memory and finishes
-    in similar wall-clock time.
+    next to them, indexed by makeblastdb). DBs are cached and only rebuilt
+    when the scheme manifest changes.
     """
-    db_root = db_root or (scheme.root / "blast_db")
+    # Scope batched DBs by batch_size so changing it forces a rebuild (the
+    # previous behaviour silently reused 100-loci batches when batch_size was
+    # bumped to 200, so half the scheme stopped being queried).
+    db_root = db_root or (scheme.root / f"blast_db_bs{batch_size}")
     db_root.mkdir(parents=True, exist_ok=True)
 
     loci = scheme.loci
     expected = [db_root / f"batch_{i:04d}.fasta"
                 for i in range((len(loci) + batch_size - 1) // batch_size)]
 
-    # If all expected DBs already exist + are fresh, reuse.
     if expected:
         first_nhr = Path(str(expected[0]) + ".nhr")
         last_nhr = Path(str(expected[-1]) + ".nhr")
+        # All expected batch files must actually exist, AND there must be no
+        # *extra* stale batches sitting in the directory from a previous
+        # batch_size — otherwise we'd happily query a partial scheme.
+        existing = sorted(db_root.glob("batch_*.fasta"))
         manifest_mtime = scheme.manifest_path.stat().st_mtime
         if (first_nhr.exists() and last_nhr.exists()
+                and len(existing) == len(expected)
                 and first_nhr.stat().st_mtime >= manifest_mtime):
             return expected
+        # Stale set on disk — wipe before rebuilding so we don't end up with
+        # a mixed-batch-size mess.
+        for f in existing:
+            for ext in ("", ".nhr", ".nin", ".nsq", ".ndb", ".njs",
+                        ".not", ".ntf", ".nto"):
+                p = Path(str(f) + ext) if ext else f
+                if p.exists():
+                    p.unlink()
 
     log.info("Building %d BLAST DB batch(es) of %d loci each for %s…",
              len(expected), batch_size, scheme.name)
@@ -103,20 +167,33 @@ def build_concat_db(scheme: Scheme, db_root: Path | None = None,
     return out_paths
 
 
-def _blast_batch(assembly: Path, db: Path, threads: int) -> dict[str, dict]:
-    """BLAST one batch DB; return {locus: best-hit} (streaming aggregate)."""
-    fmt = "6 qseqid sseqid pident length qstart qend sstart send evalue bitscore slen"
-    cmd = ["blastn", "-query", str(assembly), "-db", str(db),
-           "-outfmt", fmt, "-num_threads", str(threads),
-           "-max_target_seqs", str(MAX_HITS_PER_BATCH),
-           # 1e-20 is still highly specific for ~500–1500 bp loci but won't
-           # filter out shorter true matches the way 1e-30 did.
-           "-evalue", "1e-20", "-perc_identity", "80"]
+# ---------------------------------------------------------------------------
+# Step 3 — CDS-vs-allele BLAST + best-hit-per-locus aggregation
+# ---------------------------------------------------------------------------
+
+def _blast_batch_cds(cds_fa: Path, db: Path, threads: int) -> dict[str, dict]:
+    """BLAST predicted CDS against one batch DB; return {locus: best hit}.
+
+    Because each CDS matches alleles of (usually) one locus, `-max_target_seqs`
+    operates correctly per-query: the cap never saturates and no locus is
+    silently dropped. We aggregate the best hit per locus across the whole
+    BLAST output stream.
+    """
+    fmt = "6 qseqid sseqid pident length qstart qend sstart send evalue bitscore slen qlen"
+    cmd = [
+        "blastn", "-task", "blastn",
+        "-query", str(cds_fa), "-db", str(db),
+        "-outfmt", fmt, "-num_threads", str(threads),
+        "-max_target_seqs", str(MAX_HITS_PER_QUERY),
+        "-evalue", "1e-20",
+        "-perc_identity", "80",
+        "-dust", "no",   # turn off low-complexity masking; bioinformatic alleles aren't repetitive
+    ]
     proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
     best: dict[str, dict] = {}
     for line in proc.stdout.splitlines():
         c = line.split("\t")
-        if len(c) < 11:
+        if len(c) < 12:
             continue
         sid = c[1]
         if LOCUS_SEP not in sid:
@@ -128,7 +205,9 @@ def _blast_batch(assembly: Path, db: Path, threads: int) -> dict[str, dict]:
             best[locus] = {
                 "locus": locus, "allele": allele,
                 "pident": float(c[2]), "length": int(c[3]),
-                "bitscore": bitscore, "slen": int(c[10]),
+                "bitscore": bitscore,
+                "slen": int(c[10]),
+                "qlen": int(c[11]),
             }
     return best
 
@@ -140,18 +219,24 @@ def call_cgmlst(
     min_identity: float = DEFAULT_IDENTITY,
     min_coverage: float = DEFAULT_COVERAGE,
 ) -> MLSTResult:
+    """Call cgMLST using the prodigal → BLAST(CDS-vs-alleles) workflow."""
     if threads == 0:
         threads = max(1, mp.cpu_count() // 2)
 
+    # 1. Allele DB (cached across samples)
     batches = build_concat_db(scheme)
+
+    # 2. Predict CDS (cached per assembly)
+    cds_cache = scheme.root / "cds_cache"
+    cds_fa = predict_cds(assembly, cds_cache)
 
     sample = assembly.stem.replace(".fna", "").replace(".fasta", "").replace(".fa", "")
     result = MLSTResult(sample=sample, scheme=scheme.name, st=None)
 
-    # Run BLAST against each batch DB sequentially; merge best hits per locus.
+    # 3. BLAST CDS against each batch DB; merge best hits per locus.
     by_locus: dict[str, list[dict]] = defaultdict(list)
     for batch_db in batches:
-        best = _blast_batch(assembly, batch_db, threads=threads)
+        best = _blast_batch_cds(cds_fa, batch_db, threads=threads)
         for locus, hit in best.items():
             by_locus[locus].append(hit)
 
@@ -165,10 +250,17 @@ def call_cgmlst(
             continue
         hits.sort(key=lambda h: h["bitscore"], reverse=True)
         top = hits[0]
-        cov = 100.0 * top["length"] / top["slen"]
+        # Take the max of subject coverage and query coverage. The CDS query
+        # is usually slightly longer than the matched allele (it includes the
+        # start codon and stop codon); using max() captures both directions.
+        slen = max(1, top["slen"])
+        qlen = max(1, top["qlen"])
+        cov_subj = 100.0 * top["length"] / slen
+        cov_query = 100.0 * top["length"] / qlen
+        cov = max(cov_subj, cov_query)
         allele_id = top["allele"]
         if top["pident"] >= min_identity and cov >= min_coverage:
-            if top["pident"] >= 99.999 and cov >= 99.999:
+            if top["pident"] >= 99.999 and cov_subj >= 99.0:
                 flag, allele = "EXC", allele_id
             else:
                 flag, allele = "INF", f"{allele_id}~"
@@ -182,14 +274,11 @@ def call_cgmlst(
                 coverage=cov, bitscore=top["bitscore"], flag="LNF",
             )
 
-    # ST lookup against the profile table (if it exists for cgMLST too)
+    # Diagnostics
     total_loci = len(scheme.loci)
     missing = sum(1 for c in result.calls.values() if c.allele is None)
     inexact = sum(1 for c in result.calls.values() if c.flag == "INF")
     exact = sum(1 for c in result.calls.values() if c.flag == "EXC")
-    # Diagnostic: when LNF dominates, distinguish "no BLAST hit at all" from
-    # "hit existed but didn't clear thresholds" — surfaces wrong-scheme /
-    # too-strict-cutoff problems instead of looking like a silent failure.
     lnf_with_hit = sum(1 for loc in scheme.loci
                        if by_locus.get(loc) and result.calls[loc].flag == "LNF")
     lnf_no_hit = missing - lnf_with_hit
@@ -207,6 +296,9 @@ def call_cgmlst(
             "verify the scheme matches the species."
         )
 
+    # ST lookup against the profile table (cgMLST schemes ship loci-only,
+    # so this branch is only hit for MLST/wgMLST-style schemes that include
+    # a profiles.tsv).
     if scheme.profile_table and scheme.profile_table.exists() and missing == 0:
         try:
             from mlstudio.calling.mlst import _load_profile_table

@@ -243,10 +243,26 @@ def call_cgmlst_cmd(
     min_identity: float = typer.Option(90.0, "--min-identity"),
     min_coverage: float = typer.Option(90.0, "--min-coverage"),
 ) -> None:
-    """Call cgMLST on a single assembly (concatenated BLAST DB)."""
+    """Call cgMLST on a single assembly (prodigal → BLAST workflow)."""
     from mlstudio.calling.cgmlst import call_cgmlst as _call_cgmlst
+    from mlstudio.schemes import Scheme
+    from mlstudio.schemes.bigsdb import cache_root, REGISTRY
 
-    sch = pull_scheme(scheme)
+    # Schemes come from three places: the BIGSdb / PubMLST registry, the
+    # cgMLST.org client, and the local ad-hoc builder. The first lives in
+    # REGISTRY; the latter two only exist under the on-disk cache. Try the
+    # local cache first so cached cgmlst.org keys work without a fresh pull.
+    root = cache_root() / scheme
+    if (root / "manifest.json").exists():
+        sch = Scheme.from_dir(root)
+    elif scheme in REGISTRY:
+        sch = pull_scheme(scheme)
+    else:
+        raise typer.BadParameter(
+            f"Scheme '{scheme}' is neither in the registry nor cached locally. "
+            f"For cgMLST.org schemes, run `mlstudio schemes pull-eskapee` or "
+            f"use the GUI's catalog browser first."
+        )
     result = _call_cgmlst(assembly, sch, threads=threads,
                           min_identity=min_identity, min_coverage=min_coverage)
     exc = sum(1 for c in result.calls.values() if c.flag == "EXC")

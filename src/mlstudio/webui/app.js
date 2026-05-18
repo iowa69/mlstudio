@@ -382,6 +382,7 @@ function subscribe(jobId) {
       const result = await api('/jobs/' + jobId);
       state.results = result.results;
       state.mst = result.mst;
+      state.amr_results = result.amr || {};
       // Compute cluster_id from current scheme threshold if not present
       const nodes = state.mst.elements.filter(e => !e.data.source);
       if (!nodes.some(n => n.data.cluster_id)) {
@@ -446,6 +447,23 @@ function renderComparisonTable() {
     { key: 'st', label: 'ST', cls: '', getter: r => r.st || '—' },
     { key: 'cluster_id', label: 'Cluster', cls: colorField === 'cluster_id' ? 'color-key' : '', getter: r => state.clusterOf?.[r.sample] || '—' },
   ];
+  // AMR column appears whenever the run included an AMR scan. Shows the
+  // distinct gene symbols hit; per-sample-per-gene detail is in the TSV
+  // export. Never contributes to the MST distance.
+  const amr = state.amr_results || {};
+  const anyAmr = Object.values(amr).some(hits => Array.isArray(hits) && hits.length > 0);
+  if (anyAmr) {
+    cols.push({
+      key: 'amr', label: 'AMR genes', cls: '',
+      getter: r => {
+        const hits = amr[r.sample] || [];
+        if (!hits.length) return '';
+        const genes = Array.from(new Set(hits.map(h => h.gene_symbol).filter(Boolean)));
+        return genes.length <= 4 ? genes.join(', ')
+                                 : genes.slice(0, 4).join(', ') + ` +${genes.length - 4}`;
+      }
+    });
+  }
   if (compact) {
     cols.push({ key: 'exc', label: 'EXC', cls: 'distance-key', getter: r => Object.values(r.calls).filter(c => c.flag==='EXC').length });
     cols.push({ key: 'inf', label: 'INF', cls: 'distance-key', getter: r => Object.values(r.calls).filter(c => c.flag==='INF').length });
@@ -1481,7 +1499,10 @@ $('export-tsv-btn')?.addEventListener('click', () => {
   if (!state.results.length) { alert('Run an analysis first.'); return; }
   const loci = Object.keys(state.results[0].calls || {});
   const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id' && f !== 'st');
-  const header = ['sample', 'st', 'cluster_id', 'exc', 'inf', 'lnf', 'notes', ...metaCols, ...loci];
+  const includeAmr = state.amr_results && Object.values(state.amr_results).some(h => h?.length);
+  const header = ['sample', 'st', 'cluster_id', 'exc', 'inf', 'lnf', 'notes',
+                  ...(includeAmr ? ['amr_genes'] : []),
+                  ...metaCols, ...loci];
   const rows = [header.join('\t')];
   for (const r of state.results) {
     const calls = r.calls || {};
@@ -1497,8 +1518,14 @@ $('export-tsv-btn')?.addEventListener('click', () => {
       if (c.flag === 'INF') return (c.allele ?? '?') + '~';
       return '';   // LNF / missing
     });
+    const amrGenes = includeAmr
+      ? Array.from(new Set((state.amr_results?.[r.sample] || [])
+                             .map(h => h.gene_symbol).filter(Boolean))).join(';')
+      : null;
     rows.push([r.sample, r.st ?? '', cluster, exc, inf, lnf,
-               (r.notes || []).join(' | '), ...meta, ...alleles].join('\t'));
+               (r.notes || []).join(' | '),
+               ...(includeAmr ? [amrGenes] : []),
+               ...meta, ...alleles].join('\t'));
   }
   const blob = new Blob([rows.join('\n')], { type: 'text/tab-separated-values' });
   const url = URL.createObjectURL(blob);

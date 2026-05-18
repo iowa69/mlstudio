@@ -681,8 +681,21 @@ def create_app() -> FastAPI:
         app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
         @app.get("/")
-        async def index() -> FileResponse:
-            return FileResponse(frontend_dir / "index.html")
+        async def index():
+            # Rewrite the static-asset URLs with a per-version query string so
+            # browsers reliably pick up new app.js / style.css after a release
+            # instead of serving the cached previous version. Falls back to
+            # serving the raw file if templating fails for any reason.
+            try:
+                html = (frontend_dir / "index.html").read_text()
+                html = html.replace('/static/app.js',
+                                    f'/static/app.js?v={__version__}')
+                html = html.replace('/static/style.css',
+                                    f'/static/style.css?v={__version__}')
+                from fastapi.responses import HTMLResponse
+                return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+            except Exception:
+                return FileResponse(frontend_dir / "index.html")
 
     return app
 
