@@ -1160,6 +1160,12 @@ function applyClusters() {
 let hullCanvas = null;
 let hullCtx = null;
 
+// Three-function dance that *must not* form a cycle:
+//   ensureHullCanvas → resizeHullCanvas (sets bitmap size, no redraw)
+//   redrawHulls       → ensureHullCanvas (idempotent), then paints
+// Previous version had resizeHullCanvas → redrawHulls → ensureHullCanvas
+// → resizeHullCanvas, blowing the JS stack the moment a halo redraw was
+// triggered (RangeError: Maximum call stack size exceeded).
 function ensureHullCanvas() {
   const cyDiv = $('cy');
   if (!cyDiv) return;
@@ -1167,19 +1173,16 @@ function ensureHullCanvas() {
     hullCanvas = document.createElement('canvas');
     hullCanvas.style.position = 'absolute';
     hullCanvas.style.inset = '0';
-    // pointer-events:none lets clicks/wheel pass straight through to the
-    // Cytoscape canvases underneath, so zoom / pan / drag remain interactive.
+    // pointer-events:none → wheel/click pass straight through to the
+    // Cytoscape canvases underneath, so zoom / pan / drag stay interactive.
     hullCanvas.style.pointerEvents = 'none';
     hullCanvas.style.zIndex = '1';
     hullCtx = hullCanvas.getContext('2d');
-    new ResizeObserver(resizeHullCanvas).observe(cyDiv);
+    // The observer also calls redrawHulls(), not resize-then-redraw, so we
+    // don't recurse via the resize path.
+    new ResizeObserver(() => { resizeHullCanvas(); redrawHulls(); })
+      .observe(cyDiv);
   }
-  // Re-attach if Cytoscape's destroy()/init pass removed our canvas from the
-  // DOM. Without this, halos vanish on every re-render. Append (not
-  // prepend) — this is the layering that worked in the original
-  // implementation: hull canvas sits *above* Cytoscape's canvases at
-  // z-index:1 but with pointer-events:none, so the halo paints over the
-  // tree visually while every interaction still reaches Cytoscape.
   if (hullCanvas.parentNode !== cyDiv) {
     cyDiv.appendChild(hullCanvas);
   }
@@ -1189,6 +1192,7 @@ function ensureHullCanvas() {
 function resizeHullCanvas() {
   if (!hullCanvas) return;
   const cyDiv = $('cy');
+  if (!cyDiv) return;
   const r = cyDiv.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   hullCanvas.width = r.width * dpr;
@@ -1196,7 +1200,7 @@ function resizeHullCanvas() {
   hullCanvas.style.width = r.width + 'px';
   hullCanvas.style.height = r.height + 'px';
   hullCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  redrawHulls();
+  // No redrawHulls() here — see comment block above.
 }
 
 // Andrew's monotone chain convex hull
