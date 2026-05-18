@@ -990,16 +990,24 @@ let hullCanvas = null;
 let hullCtx = null;
 
 function ensureHullCanvas() {
-  if (hullCanvas) return;
   const cyDiv = $('cy');
-  hullCanvas = document.createElement('canvas');
-  hullCanvas.style.position = 'absolute';
-  hullCanvas.style.inset = '0';
-  hullCanvas.style.pointerEvents = 'none';
-  hullCanvas.style.zIndex = '1';
-  cyDiv.appendChild(hullCanvas);
-  hullCtx = hullCanvas.getContext('2d');
-  new ResizeObserver(resizeHullCanvas).observe(cyDiv);
+  if (!cyDiv) return;
+  if (!hullCanvas) {
+    hullCanvas = document.createElement('canvas');
+    hullCanvas.style.position = 'absolute';
+    hullCanvas.style.inset = '0';
+    hullCanvas.style.pointerEvents = 'none';
+    hullCanvas.style.zIndex = '0';
+    hullCtx = hullCanvas.getContext('2d');
+    new ResizeObserver(resizeHullCanvas).observe(cyDiv);
+  }
+  // Re-attach if Cytoscape's destroy()/init pass removed our canvas from the
+  // DOM. Without this, halos vanish on every re-render. Prepend so the canvas
+  // sits *below* Cytoscape's own canvases — the halo paints behind nodes
+  // instead of obscuring them.
+  if (hullCanvas.parentNode !== cyDiv) {
+    cyDiv.insertBefore(hullCanvas, cyDiv.firstChild);
+  }
   resizeHullCanvas();
 }
 
@@ -1283,9 +1291,27 @@ function applyPieStyles() {
 }
 
 function renderLegend(field, palette) {
-  const keys = Object.keys(palette);
   const legend = $('legend');
-  if (!keys.length) { legend.classList.add('hidden'); return; }
+  let keys = Object.keys(palette);
+
+  // For cluster_id specifically, hide singleton "clusters" from the legend —
+  // they're rendered grey and shouldn't claim a row. Use the canonical
+  // state.clusters list (already filtered to size >= 2 in computeClusters).
+  if (field === 'cluster_id') {
+    const realClusterNames = new Set((state.clusters || []).map(c => c.id));
+    keys = keys.filter(k => realClusterNames.has(k));
+    if (!keys.length) {
+      // No real clusters at the current threshold — hide the legend entirely
+      // so the canvas stays clean. The cluster halo slider tells the user
+      // what to adjust.
+      legend.classList.add('hidden');
+      return;
+    }
+  } else if (!keys.length) {
+    legend.classList.add('hidden');
+    return;
+  }
+
   legend.classList.remove('hidden');
   legend.innerHTML = `<h3>${field}</h3>` +
     keys.slice(0, 30).map(k => `<div class="legend-item"><span class="legend-swatch" style="background:${palette[k]}"></span>${k}</div>`).join('') +
@@ -1393,35 +1419,60 @@ $('zoom-reset')?.addEventListener('click', () => {
 // Re-run = same parameters, fresh analysis (useful after adding isolates).
 // Change scheme = swap to a different scheme and re-run.
 // Reset = wipe results, return to welcome screen.
+// Action button wrappers — surface any error to the user instead of silently
+// throwing into the console. Each handler is wrapped so a single broken
+// element selector doesn't kill all subsequent actions on the page.
+function guardedHandler(fn, label) {
+  return (ev) => {
+    try { return fn(ev); }
+    catch (e) {
+      console.error(`[${label}] failed:`, e);
+      setStatus('error', `${label}: ${e.message}`);
+    }
+  };
+}
+
 function rerunAnalysis() {
-  if (!$('folder-input').value.trim() || !$('scheme-select').value) return;
+  const folder = $('folder-input').value.trim();
+  const scheme = $('scheme-select').value;
+  if (!folder) { setStatus('error', 'Re-run: no folder selected'); return; }
+  if (!scheme) { setStatus('error', 'Re-run: no scheme selected'); return; }
+  // Re-enable Analyze in case Reset disabled it, then click it.
+  $('run-btn').disabled = false;
   $('run-btn').click();
 }
-$('rerun-btn')?.addEventListener('click', rerunAnalysis);
-$('change-scheme-btn')?.addEventListener('click', () => {
+$('rerun-btn')?.addEventListener('click', guardedHandler(rerunAnalysis, 'Re-run'));
+
+$('change-scheme-btn')?.addEventListener('click', guardedHandler(() => {
   const sel = $('scheme-select');
   sel.focus();
-  // Visual cue: pulse the dropdown so the user knows to pick a new one.
   sel.classList.add('attention');
   setTimeout(() => sel.classList.remove('attention'), 1200);
-});
-$('reset-btn')?.addEventListener('click', () => {
+}, 'Change scheme'));
+
+$('reset-btn')?.addEventListener('click', guardedHandler(() => {
   if (state.cy) { state.cy.destroy(); state.cy = null; }
-  if (hullCtx) hullCtx.clearRect(0, 0, hullCanvas.width, hullCanvas.height);
+  if (hullCtx && hullCanvas) hullCtx.clearRect(0, 0, hullCanvas.width, hullCanvas.height);
   state.jobId = null;
   state.results = [];
   state.mst = null;
   state.clusters = [];
-  $('empty-state').classList.remove('hidden');
-  $('legend').classList.add('hidden');
-  $('comparison-table').innerHTML = '';
-  $('stats-content').innerHTML = '';
-  $('save-project-btn').disabled = true;
-  $('rerun-btn').disabled = true;
-  $('change-scheme-btn').disabled = true;
-  $('job-progress').classList.add('hidden');
+  state.metaBySample = {};
+  if ($('empty-state'))      $('empty-state').classList.remove('hidden');
+  if ($('legend'))           $('legend').classList.add('hidden');
+  if ($('comparison-table')) $('comparison-table').innerHTML = '';
+  if ($('stats-content'))    $('stats-content').innerHTML = '';
+  if ($('save-project-btn')) $('save-project-btn').disabled = true;
+  if ($('rerun-btn'))         $('rerun-btn').disabled = true;
+  if ($('change-scheme-btn')) $('change-scheme-btn').disabled = true;
+  if ($('job-progress'))     $('job-progress').classList.add('hidden');
+  // Keep Analyze enabled if the folder has already been scanned — saves a
+  // redundant Scan step when the user just wants to start over.
+  if ($('scan-result')?.textContent?.match(/\d+ sample/)) {
+    $('run-btn').disabled = false;
+  }
   setStatus('idle', 'Idle');
-});
+}, 'Reset'));
 
 // ---- TSV export of the comparison table ------------------------------------
 // Always exports the full per-locus matrix regardless of compact-view state,

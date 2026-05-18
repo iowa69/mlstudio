@@ -24,8 +24,14 @@ from mlstudio.schemes import Scheme
 
 log = logging.getLogger(__name__)
 
+# Default thresholds — chewBBACA-style permissive defaults. Subject coverage
+# is intentionally low (80%) because cgMLST loci frequently land at contig
+# boundaries in fragmented assemblies, so a fully-conserved allele with the
+# tail truncated by the contig break should still be called (it'll be flagged
+# INF if identity slips below 100%). 90/90 was too strict and caused 95%+
+# LNF on real-world data; this matches the chewBBACA / pyMLST consensus.
 DEFAULT_IDENTITY = 90.0
-DEFAULT_COVERAGE = 90.0
+DEFAULT_COVERAGE = 80.0
 LOCUS_SEP = "__"
 # Loci per BLAST DB batch. Big enough that the per-batch BLAST call has
 # meaningful work; small enough that -max_target_seqs comfortably covers
@@ -103,7 +109,9 @@ def _blast_batch(assembly: Path, db: Path, threads: int) -> dict[str, dict]:
     cmd = ["blastn", "-query", str(assembly), "-db", str(db),
            "-outfmt", fmt, "-num_threads", str(threads),
            "-max_target_seqs", str(MAX_HITS_PER_BATCH),
-           "-evalue", "1e-30", "-perc_identity", "85"]
+           # 1e-20 is still highly specific for ~500–1500 bp loci but won't
+           # filter out shorter true matches the way 1e-30 did.
+           "-evalue", "1e-20", "-perc_identity", "80"]
     proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
     best: dict[str, dict] = {}
     for line in proc.stdout.splitlines():
@@ -175,10 +183,29 @@ def call_cgmlst(
             )
 
     # ST lookup against the profile table (if it exists for cgMLST too)
+    total_loci = len(scheme.loci)
     missing = sum(1 for c in result.calls.values() if c.allele is None)
     inexact = sum(1 for c in result.calls.values() if c.flag == "INF")
     exact = sum(1 for c in result.calls.values() if c.flag == "EXC")
-    result.notes.append(f"loci called: {exact} EXC + {inexact} INF; missing: {missing}")
+    # Diagnostic: when LNF dominates, distinguish "no BLAST hit at all" from
+    # "hit existed but didn't clear thresholds" — surfaces wrong-scheme /
+    # too-strict-cutoff problems instead of looking like a silent failure.
+    lnf_with_hit = sum(1 for loc in scheme.loci
+                       if by_locus.get(loc) and result.calls[loc].flag == "LNF")
+    lnf_no_hit = missing - lnf_with_hit
+    pct_missing = 100.0 * missing / max(1, total_loci)
+    result.notes.append(
+        f"loci called: {exact} EXC + {inexact} INF; missing: {missing} "
+        f"({pct_missing:.1f}%; {lnf_no_hit} no BLAST hit, "
+        f"{lnf_with_hit} below identity/coverage cutoff)"
+    )
+    if pct_missing > 50:
+        result.notes.append(
+            "WARNING: more than half the scheme came back LNF — most likely "
+            "the wrong scheme was chosen for this organism, or the assembly "
+            "is unusually fragmented. Try lowering --min-coverage to 70 or "
+            "verify the scheme matches the species."
+        )
 
     if scheme.profile_table and scheme.profile_table.exists() and missing == 0:
         try:
