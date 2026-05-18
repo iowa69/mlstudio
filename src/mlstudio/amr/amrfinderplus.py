@@ -20,12 +20,29 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# Map our scheme registry keys to AMRFinderPlus --organism values
+# Map our scheme registry keys to AMRFinderPlus --organism values. The
+# --organism flag turns on organism-specific point-mutation panels (e.g.
+# Efaecium pbp5_E629V, Saureus mecA / mecC, S. enterica gyrA_S83F, …),
+# which is essential for clinical resistance interpretation.
 ORGANISM_MAP: dict[str, str] = {
     "saureus": "Staphylococcus_aureus",
     "lmonocytogenes": "Listeria",
     "ecoli": "Escherichia",
     "kpneumoniae": "Klebsiella_pneumoniae",
+    "efaecium": "Enterococcus_faecium",
+    "efaecalis": "Enterococcus_faecalis",
+    "abaumannii": "Acinetobacter_baumannii",
+    "paeruginosa": "Pseudomonas_aeruginosa",
+    "senterica": "Salmonella",
+    "spyogenes": "Streptococcus_pyogenes",
+    "spneumoniae": "Streptococcus_pneumoniae",
+    "ngonorrhoeae": "Neisseria_gonorrhoeae",
+    "nmeningitidis": "Neisseria_meningitidis",
+    "cjejuni": "Campylobacter",
+    "cdifficile": "Clostridioides_difficile",
+    "mtuberculosis": "Mycobacterium_tuberculosis",
+    "hpylori": "Helicobacter_pylori",
+    "vcholerae": "Vibrio_cholerae",
 }
 
 
@@ -64,8 +81,18 @@ def run_amrfinderplus(
     organism: str | None = None,
     threads: int = 4,
     db_path: Path | None = None,
+    *,
+    use_plus: bool = True,
 ) -> AmrResult:
-    """Run amrfinder on a nucleotide assembly. Returns parsed hits."""
+    """Run amrfinder on a nucleotide assembly. Returns parsed hits.
+
+    `use_plus=True` (default) adds the `--plus` flag — turns on the
+    "Plus" panel that includes virulence factors, stress-response genes,
+    biocide / heavy-metal resistance, and antigen / pathotype markers
+    (intimin, Shiga toxins, …). This is what SeqSphere+ surfaces under
+    the Resistome / Virulome / Stress Response tabs and is essential
+    for full clinical resistance + virulence interpretation.
+    """
     sample = assembly.stem.replace(".fna", "").replace(".fasta", "").replace(".fa", "")
 
     if not amrfinder_available():
@@ -73,6 +100,8 @@ def run_amrfinderplus(
                          error="amrfinder binary not found in PATH")
 
     cmd = ["amrfinder", "-n", str(assembly), "--threads", str(threads)]
+    if use_plus:
+        cmd.append("--plus")
     if organism:
         cmd += ["--organism", organism]
     if db_path:

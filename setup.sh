@@ -38,6 +38,8 @@ else
         "fastp>=0.23" \
         "seqkit>=2.8" \
         "prodigal>=2.6" \
+        "ncbi-amrfinderplus>=3.12" \
+        "minimap2>=2.28" \
         pip
 fi
 
@@ -50,7 +52,7 @@ conda run -n "$ENV_NAME" pip install -e "${REPO_DIR}[dev]"
 # --- Verify ----------------------------------------------------------------
 
 log "Verifying tools..."
-for tool in blastn makeblastdb bowtie2 samtools fastp seqkit; do
+for tool in blastn makeblastdb bowtie2 samtools fastp seqkit amrfinder; do
     if ! conda run -n "$ENV_NAME" which "$tool" >/dev/null; then
         die "Tool '$tool' missing from env after install."
     fi
@@ -58,5 +60,29 @@ done
 
 conda run -n "$ENV_NAME" mlstudio --version
 
-log "Done. Activate with: conda activate $ENV_NAME"
-log "Launch the GUI with:  mlstudio gui /path/to/folder"
+# --- Bundled data: AMRFinderPlus database + ESKAPEE schemes ---------------
+# Optional but recommended — this is what makes a fresh git clone usable
+# clinically out-of-the-box. Pass --no-data to skip if you only want the
+# code installed.
+if [[ "${1:-}" != "--no-data" ]]; then
+    log "Downloading AMRFinderPlus database (~250 MB, one-time)..."
+    conda run -n "$ENV_NAME" amrfinder -u || \
+        log "  (amrfinder DB download failed — re-run 'amrfinder -u' later)"
+
+    log "Pulling ESKAPEE cgMLST schemes from cgMLST.org (~1–2 GB, one-time)..."
+    conda run -n "$ENV_NAME" mlstudio schemes pull-eskapee || \
+        log "  (ESKAPEE pull failed — re-run 'mlstudio schemes pull-eskapee')"
+
+    log "Pulling companion classical MLST schemes from PubMLST + Pasteur..."
+    for s in efaecium_mlst saureus_mlst kpneumoniae_mlst ecoli_mlst \
+             lmonocytogenes_mlst abaumannii_mlst paeruginosa_mlst; do
+        conda run -n "$ENV_NAME" mlstudio schemes pull "$s" 2>/dev/null \
+            && log "  ✓ $s" \
+            || log "  ✗ $s (skipped; pull later)"
+    done
+fi
+
+log "Done."
+log "  Activate with: conda activate $ENV_NAME"
+log "  Launch GUI:    mlstudio gui /path/to/folder"
+log "  Or skip schemes/AMR DB next time with: ./setup.sh --no-data"

@@ -32,6 +32,50 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://www.cgmlst.org/ncs/schema"
 REGISTRY_FILE = Path(__file__).with_name("cgmlst_org_registry.json")
 
+# Per-organism cgMLST outbreak thresholds, in alleles. These are the
+# published / SeqSphere default cluster cutoffs used in clinical practice
+# (Ruppitsch 2015 Lmono ≤7; Higgins 2019 Efaecium ≤3; Leopold 2014 Saureus
+# ≤24; etc.). Used as the *default* cluster_threshold when pulling a
+# scheme so the GUI's outbreak halo starts at a biologically sensible
+# value instead of a one-size-fits-all 5.
+ORGANISM_CLUSTER_THRESHOLD: dict[str, int] = {
+    "Lmonocytogenes":        7,    # Ruppitsch 2015
+    "Saureus":               24,   # SeqSphere / Leopold 2014
+    "Sargenteus":            24,
+    "Scapitis":              24,
+    "Kpneumoniae_complex":   15,   # Ridom cgMLST.org default
+    "Koxytoca_complex":      15,
+    "Ecoli":                 10,   # SeqSphere default
+    "Senterica":             10,
+    "Efaecium":              3,    # Higgins 2019 (low diversity → tight cut)
+    "Efaecalis":             5,
+    "Abaumannii":            6,    # Higgins 2017
+    "Paeruginosa":           7,
+    "Cjejuni_complex":       12,
+    "Cdifficile":            6,
+    "Cperfringens":          5,
+    "Cdiphtheriae":          25,
+    "Csakazakii_complex":    10,
+    "Cfreundii":             10,
+    "Cfreundii_complex":     10,
+    "Ehormaechei":           12,
+    "Mtuberculosis_complex": 12,   # SNP-based usually but cgMLST roughly equivalent
+    "Mabscessus":            25,
+    "Spyogenes":             10,
+    "Pmirabilis":            10,
+    "Ftularensis":            6,
+    "Yenterocolitica":       15,
+    "Lpneumophila":          10,
+    "Smarcescens":           10,
+    "Bpertussis":            10,
+    "Brucella":               6,
+    "Bmelitensis":            6,
+    "Bmallei_fli":            6,
+    "Bmallei_rki":            6,
+    "Bpseudomallei":          6,
+    "Banthracis":             5,
+}
+
 
 def load_registry() -> list[dict]:
     """Return the bundled list of cgMLST.org schemes (organism / slug / counts)."""
@@ -45,11 +89,18 @@ def _slug_to_key(slug: str) -> str:
 def pull_cgmlst_org_scheme(
     slug: str,
     organism: str | None = None,
-    cluster_threshold: int = 5,
+    cluster_threshold: int | None = None,
     cache_dir: Path | None = None,
     force: bool = False,
 ) -> Scheme:
-    """Download and unpack a cgMLST.org scheme into the local cache."""
+    """Download and unpack a cgMLST.org scheme into the local cache.
+
+    `cluster_threshold` defaults to the published per-organism value in
+    ORGANISM_CLUSTER_THRESHOLD (5 if the slug is unknown). This is the
+    initial outbreak-cluster threshold the GUI uses.
+    """
+    if cluster_threshold is None:
+        cluster_threshold = ORGANISM_CLUSTER_THRESHOLD.get(slug, 5)
     key = _slug_to_key(slug)
     root = (cache_dir or cache_root()) / key
     manifest_path = root / "manifest.json"

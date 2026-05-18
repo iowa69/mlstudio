@@ -74,6 +74,12 @@ class MLSTResult:
     # for Efaecium ST1478). Empty when the scheme's profile table doesn't
     # carry a CC column or no ST was assigned.
     clonal_complex: str | None = None
+    # Clinical AMR interpretation from amrfinder --plus (set externally
+    # in the server's analyze flow after the AMRFinderPlus scan runs).
+    # See mlstudio.amr.interpretation.interpret().
+    amr_flags: list[str] = field(default_factory=list)
+    amr_classes: dict[str, list[str]] = field(default_factory=dict)
+    amr_summary: str = ""
 
     def allele_vector(self, loci_order: list[str]) -> list[str | None]:
         """Return allele numbers in scheme order; None for missing."""

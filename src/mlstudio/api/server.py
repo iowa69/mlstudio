@@ -189,6 +189,19 @@ async def _run_job(job: Job) -> None:
                 job.progress = i / len(samples)
                 job.notify()
 
+                # Per-sample assembly QC: N50, total length, GC%, # contigs,
+                # ambiguous-base count, plus a PASS / WARN / FAIL verdict.
+                # Computed in one pass over the FASTA — fast even on big
+                # batches and adds no new runtime deps.
+                from mlstudio.qc.assembly import assembly_qc as _qc
+                organism_slug = None
+                if scheme.kind == "cgmlst":
+                    # Derive the slug from the cgMLST.org key, e.g.
+                    # "efaecium_cgmlst_orgio" → "Efaecium".
+                    base = job.scheme_key.replace("_cgmlst_orgio", "").replace("_cgmlst", "")
+                    organism_slug = base[:1].upper() + base[1:]
+                sample_qc = _qc(sample.assembly, organism_slug=organism_slug)
+
                 # Optional fastp QC
                 if job.use_fastp and sample.has_reads:
                     fp_out = job.folder / ".mlstudio" / "fastp" / sample.name
@@ -307,6 +320,17 @@ async def _run_job(job: Job) -> None:
                                 }
                                 for h in amr.hits
                             ]
+                            # Clinical interpretation: drug-class buckets +
+                            # MRSA/VRE/ESBL/CPE flags + MDR/XDR proxy.
+                            from mlstudio.amr.interpretation import interpret
+                            summary = interpret(amr.hits, sample.name, org)
+                            result.amr_flags = summary.flags
+                            result.amr_classes = summary.drug_classes
+                            result.amr_summary = summary.summary_line
+                            if summary.flags:
+                                result.notes.append(
+                                    f"AMR phenotype flags: {', '.join(summary.flags)}"
+                                )
                         except Exception as e:
                             log.warning("AMRFinderPlus failed for %s: %s", sample.name, e)
                 result_dict = {
@@ -318,6 +342,21 @@ async def _run_job(job: Job) -> None:
                     "mlst_st": result.mlst_st,
                     "mlst_scheme": result.mlst_scheme,
                     "clonal_complex": result.clonal_complex,
+                    "amr_flags": list(result.amr_flags),
+                    "amr_classes": dict(result.amr_classes),
+                    "amr_summary": result.amr_summary,
+                    "qc": {
+                        "verdict":      sample_qc.verdict,
+                        "n_contigs":    sample_qc.n_contigs,
+                        "total_length": sample_qc.total_length,
+                        "longest_contig": sample_qc.longest_contig,
+                        "n50":          sample_qc.n50,
+                        "n90":          sample_qc.n90,
+                        "gc_percent":   round(sample_qc.gc_percent, 2),
+                        "n_count":      sample_qc.n_count,
+                        "n_fraction":   round(sample_qc.n_fraction, 4),
+                        "reasons":      sample_qc.reasons or [],
+                    },
                     "calls": {loc: asdict(c) for loc, c in result.calls.items()},
                     "notes": result.notes,
                     "input": _sample_to_dict(sample),
@@ -867,8 +906,11 @@ def _histogram(vals: list[int], bins: int = 30) -> dict[str, list[int]]:
 
 
 # Bumped when the result_dict schema changes so old cached entries don't
-# silently mask new fields. v2 → cgst + mlst_st + mlst_scheme columns.
-_CALL_CACHE_VERSION = "v2"
+# silently mask new fields.
+#   v2 → cgst + mlst_st + mlst_scheme columns.
+#   v3 → cgst_id + clonal_complex + HierCC hier + AMR interpretation flags
+#         + per-sample assembly QC verdict.
+_CALL_CACHE_VERSION = "v3"
 
 
 def _sample_cache_key(sample: Sample, scheme: Scheme, *, mlst_paired: str | None = None) -> str:

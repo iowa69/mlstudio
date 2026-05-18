@@ -526,6 +526,44 @@ function renderComparisonTable() {
       });
     }
   }
+  // Clinical resistance flags (MRSA / VRE / ESBL+ / CPE / MDR / XDR).
+  const anyFlags = state.results.some(r => r.amr_flags && r.amr_flags.length);
+  if (anyFlags) {
+    cols.push({
+      key: 'amr_flags', label: 'Clinical flags', cls: '',
+      getter: r => {
+        const flags = r.amr_flags || [];
+        if (!flags.length) return '—';
+        return flags.map(f => {
+          let cls = 'flag-info';
+          if (/^MRSA|^VRSA|^CPE-|XDR/.test(f))      cls = 'flag-critical';
+          else if (/^VRE-|^ESBL\+|MDR/.test(f))     cls = 'flag-warn';
+          return `<span class="amr-flag ${cls}">${f}</span>`;
+        }).join(' ');
+      },
+    });
+  }
+  // Assembly QC (PASS/WARN/FAIL pill with a tooltip listing failures).
+  const anyQc = state.results.some(r => r.qc && r.qc.verdict);
+  if (anyQc) {
+    cols.push({
+      key: 'qc', label: 'QC', cls: '',
+      getter: r => {
+        const q = r.qc;
+        if (!q?.verdict) return '—';
+        const tooltip = [
+          `N50 ${q.n50?.toLocaleString() ?? '?'} bp`,
+          `${q.n_contigs} contigs`,
+          `${q.total_length?.toLocaleString() ?? '?'} bp total`,
+          `GC ${q.gc_percent ?? '?'}%`,
+          ...(q.reasons || []),
+        ].join(' • ');
+        const cls = q.verdict === 'PASS' ? 'flag-info'
+                  : q.verdict === 'WARN' ? 'flag-warn' : 'flag-critical';
+        return `<span class="amr-flag ${cls}" title="${tooltip}">${q.verdict}</span>`;
+      },
+    });
+  }
   cols.push({
     key: 'cluster_id', label: 'Cluster',
     cls: colorField === 'cluster_id' ? 'color-key' : '',
