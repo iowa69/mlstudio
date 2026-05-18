@@ -232,8 +232,8 @@ def call_mlst_cmd(
     scheme: str = typer.Option(..., "--scheme", help="Scheme registry key."),
     assembly: Path = typer.Option(..., "--input", exists=True, help="FASTA file."),
     threads: int = typer.Option(0, "--threads", "-t", help="0 = auto."),
-    min_identity: float = typer.Option(95.0, "--min-identity"),
-    min_coverage: float = typer.Option(90.0, "--min-coverage"),
+    min_identity: float = typer.Option(90.0, "--min-identity"),
+    min_coverage: float = typer.Option(70.0, "--min-coverage"),
 ) -> None:
     """Call MLST on a single assembly (smoke-test command)."""
     from mlstudio.calling.mlst import call_mlst as _call_mlst

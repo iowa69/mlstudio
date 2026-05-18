@@ -483,11 +483,25 @@ function renderComparisonTable() {
   const colorField = $('color-field').value;
   const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id');
 
+  // Show cgST whenever any sample carries one (i.e. cgMLST runs). The ST
+  // column is the classical 7-gene MLST result; cgST is the stable hash of
+  // the cgMLST allele profile, so identical profiles share a cgST.
+  const anyCgst = state.results.some(r => r.cgst);
   const cols = [
     { key: 'sample', label: 'Sample', cls: '', getter: r => r.sample },
     { key: 'st', label: 'ST', cls: '', getter: r => r.st || '—' },
-    { key: 'cluster_id', label: 'Cluster', cls: colorField === 'cluster_id' ? 'color-key' : '', getter: r => state.clusterOf?.[r.sample] || '—' },
   ];
+  if (anyCgst) {
+    cols.push({
+      key: 'cgst', label: 'cgST', cls: '',
+      getter: r => r.cgst ? `<code class="cgst">${r.cgst}</code>` : '—',
+    });
+  }
+  cols.push({
+    key: 'cluster_id', label: 'Cluster',
+    cls: colorField === 'cluster_id' ? 'color-key' : '',
+    getter: r => state.clusterOf?.[r.sample] || '—',
+  });
   // AMR column appears whenever the run included an AMR scan. Shows the
   // distinct gene symbols hit; per-sample-per-gene detail is in the TSV
   // export. Never contributes to the MST distance.
@@ -1661,7 +1675,9 @@ $('export-tsv-btn')?.addEventListener('click', () => {
   const loci = Object.keys(state.results[0].calls || {});
   const metaCols = (state.metaFields || []).filter(f => f !== 'cluster_id' && f !== 'st');
   const includeAmr = state.amr_results && Object.values(state.amr_results).some(h => h?.length);
-  const header = ['sample', 'st', 'cluster_id', 'exc', 'inf', 'lnf', 'notes',
+  const includeCgst = state.results.some(r => r.cgst);
+  const header = ['sample', 'st', ...(includeCgst ? ['cgst'] : []),
+                  'cluster_id', 'exc', 'inf', 'lnf', 'notes',
                   ...(includeAmr ? ['amr_genes'] : []),
                   ...metaCols, ...loci];
   const rows = [header.join('\t')];
@@ -1683,7 +1699,9 @@ $('export-tsv-btn')?.addEventListener('click', () => {
       ? Array.from(new Set((state.amr_results?.[r.sample] || [])
                              .map(h => h.gene_symbol).filter(Boolean))).join(';')
       : null;
-    rows.push([r.sample, r.st ?? '', cluster, exc, inf, lnf,
+    rows.push([r.sample, r.st ?? '',
+               ...(includeCgst ? [r.cgst ?? ''] : []),
+               cluster, exc, inf, lnf,
                (r.notes || []).join(' | '),
                ...(includeAmr ? [amrGenes] : []),
                ...meta, ...alleles].join('\t'));

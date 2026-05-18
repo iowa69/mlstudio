@@ -23,8 +23,14 @@ from mlstudio.schemes import Scheme
 
 log = logging.getLogger(__name__)
 
-DEFAULT_IDENTITY = 95.0
-DEFAULT_COVERAGE = 90.0
+# Permissive defaults: contig boundaries cut classical MLST genes more often
+# than people realise (e.g. Efaecium pstS / ddl), and a 95/90 cutoff drops the
+# call. 90/70 still keeps the call specific (the allele table is small and
+# very different alleles get distinct numbers) while picking up real matches
+# that span contig breaks. HSP aggregation in _best_hit recovers split-HSP
+# cases on top of this.
+DEFAULT_IDENTITY = 90.0
+DEFAULT_COVERAGE = 70.0
 
 
 @dataclass(slots=True)
@@ -45,9 +51,18 @@ class AlleleCall:
 class MLSTResult:
     sample: str
     scheme: str
-    st: str | None             # e.g. "1" or "1*" (inexact) or None
+    st: str | None             # classical 7-gene ST: "1", "1*" (inexact) or None
     calls: dict[str, AlleleCall] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    # For cgMLST runs: stable 8-hex-char hash of the sorted (locus, allele)
+    # tuple, computed only for called loci (EXC / INF). Two isolates with the
+    # same cgMLST profile get the same `cgst`. This is the closest thing to
+    # an ST number for cgMLST schemes that don't ship a profile table.
+    cgst: str | None = None
+    # When a cgMLST run is auto-paired with a classical MLST one, the MLST
+    # scheme key and its ST land here so the GUI can show both.
+    mlst_scheme: str | None = None
+    mlst_st: str | None = None
 
     def allele_vector(self, loci_order: list[str]) -> list[str | None]:
         """Return allele numbers in scheme order; None for missing."""
@@ -114,12 +129,33 @@ def _best_hit(hits: list[dict], locus: str,
     if not hits:
         return AlleleCall(locus=locus, allele=None,
                           identity=0, coverage=0, bitscore=0, flag="LNF")
-    hits.sort(key=lambda h: h["bitscore"], reverse=True)
-    top = hits[0]
-    cov = 100.0 * top["length"] / top["slen"]
+    # BLAST emits one row per HSP, so a single allele match can be split into
+    # multiple rows (one per gap-broken segment). Group by subject and sum
+    # alignment length per subject — that fixes the case where a real allele
+    # hits at 95% identity but the best individual HSP covers only 20% of it
+    # (we were seeing this on Efaecium pstS, which has a small gap in its
+    # alignment to many test isolates).
+    by_subj: dict[str, dict] = {}
+    for h in hits:
+        s = h["sseqid"]
+        cur = by_subj.get(s)
+        if cur is None:
+            by_subj[s] = {**h, "_aligned": h["length"]}
+        else:
+            cur["_aligned"] += h["length"]
+            if h["bitscore"] > cur["bitscore"]:
+                cur["pident"] = h["pident"]
+                cur["bitscore"] = h["bitscore"]
+                cur["length"] = h["length"]
+                cur["slen"] = h["slen"]
+    agg = sorted(by_subj.values(), key=lambda h: h["bitscore"], reverse=True)
+    top = agg[0]
+    cov = 100.0 * top["_aligned"] / max(1, top["slen"])
     allele_id = top["sseqid"].rsplit("_", 1)[-1]
     if top["pident"] >= min_id and cov >= min_cov:
-        if top["pident"] >= 99.999 and cov >= 99.999:
+        # Treat near-100% as EXC; small drops in either pident or coverage
+        # — typical of a single SNP or a one-bp gap — are INF.
+        if top["pident"] >= 99.999 and cov >= 99.0:
             flag = "EXC"
             allele = allele_id
         else:

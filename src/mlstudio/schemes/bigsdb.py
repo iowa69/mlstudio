@@ -54,6 +54,21 @@ REGISTRY: dict[str, SchemeRef] = {
         database="pubmlst_klebsiella_seqdef", scheme_id=1, scheme_label="MLST",
         kind="mlst", cluster_threshold=0,
     ),
+    "efaecium_mlst": SchemeRef(
+        organism="Enterococcus faecium", host="https://rest.pubmlst.org",
+        database="pubmlst_efaecium_seqdef", scheme_id=1, scheme_label="MLST",
+        kind="mlst", cluster_threshold=0,
+    ),
+    "abaumannii_mlst": SchemeRef(
+        organism="Acinetobacter baumannii", host="https://rest.pubmlst.org",
+        database="pubmlst_abaumannii_seqdef", scheme_id=2, scheme_label="MLST (Pasteur)",
+        kind="mlst", cluster_threshold=0,
+    ),
+    "paeruginosa_mlst": SchemeRef(
+        organism="Pseudomonas aeruginosa", host="https://rest.pubmlst.org",
+        database="pubmlst_paeruginosa_seqdef", scheme_id=1, scheme_label="MLST",
+        kind="mlst", cluster_threshold=0,
+    ),
     # ---- cgMLST ----
     "lmonocytogenes_cgmlst": SchemeRef(
         organism="Listeria monocytogenes", host="https://bigsdb.pasteur.fr",
@@ -326,3 +341,28 @@ def list_local(cache_dir: Path | None = None) -> list[Scheme]:
         if (child / "manifest.json").exists():
             out.append(Scheme.from_dir(child))
     return out
+
+
+def paired_mlst_key(scheme_key: str) -> str | None:
+    """Return the 7-gene MLST registry key paired with a cgMLST scheme, or None.
+
+    The convention is that a cgMLST scheme named `<organism>_cgmlst(_orgio)`
+    pairs with the BIGSdb-side MLST scheme `<organism>_mlst`. We try a few
+    fallbacks so that, e.g., `kpneumoniae_complex_cgmlst_orgio` still maps to
+    `kpneumoniae_mlst` (the cgMLST.org complex covers several Klebsiella
+    species but the classical ST scheme is just one).
+    """
+    if scheme_key.endswith("_cgmlst_orgio"):
+        prefix = scheme_key[: -len("_cgmlst_orgio")]
+    elif scheme_key.endswith("_cgmlst"):
+        prefix = scheme_key[: -len("_cgmlst")]
+    else:
+        return None
+    candidates = [
+        f"{prefix}_mlst",                  # straight rename
+        f"{prefix.split('_')[0]}_mlst",    # drop "_complex" etc.
+    ]
+    for c in candidates:
+        if c in REGISTRY:
+            return c
+    return None

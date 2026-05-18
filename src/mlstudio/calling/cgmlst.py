@@ -336,4 +336,21 @@ def call_cgmlst(
         except Exception as e:
             log.debug("ST lookup skipped: %s", e)
 
+    # cgST profile hash. Stable 8-hex-char fingerprint of the sorted
+    # (locus, allele) tuple over called loci (EXC + INF). Two assemblies with
+    # the exact same cgMLST profile share a cgST; one allele difference flips
+    # it. This is the closest thing to an "ST number" cgMLST.org schemes can
+    # offer without a centrally-maintained profile table.
+    called_tuples = sorted(
+        (locus, re.sub(r"[^\d]", "", c.allele or ""))
+        for locus, c in result.calls.items()
+        if c.allele is not None
+    )
+    if called_tuples:
+        digest_input = "\t".join(f"{loc}={al}" for loc, al in called_tuples)
+        result.cgst = hashlib.sha256(digest_input.encode()).hexdigest()[:8]
+        result.notes.append(
+            f"cgST: {result.cgst} ({len(called_tuples)} called loci)"
+        )
+
     return result

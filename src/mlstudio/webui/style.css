@@ -376,6 +376,19 @@ select.attention { animation: pulseRing 1.1s ease-out 1; outline: 2px solid #3b8
 /* Slightly larger toolbar for the new tabs */
 .tab-toolbar { font-size: 12px; gap: 10px; }
 
+/* cgST profile hash — monospace pill so it reads as a stable identifier
+   rather than just text. Same colour scheme as the kind badges. */
+code.cgst {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
 /* Inline warning banner shown at the top of a tab pane */
 .banner.warning {
   margin: 8px 14px 12px 14px;

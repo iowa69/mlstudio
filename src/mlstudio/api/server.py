@@ -144,6 +144,29 @@ async def _run_job(job: Job) -> None:
         else:
             raise RuntimeError(f"Scheme {job.scheme_key} not cached. Pull it first.")
 
+        # 1b. Auto-pair: when running a cgMLST scheme, also run the matching
+        # 7-gene MLST so the user gets a classical ST alongside the cgMLST
+        # profile. Pulls the MLST scheme on demand (cached after first use).
+        # pull_scheme is sync and uses asyncio.run() internally — we have to
+        # call it from a thread so it gets its own event loop instead of
+        # clashing with the one driving _run_job.
+        mlst_companion: Scheme | None = None
+        from mlstudio.schemes.bigsdb import paired_mlst_key
+        if scheme.kind == "cgmlst":
+            paired = paired_mlst_key(job.scheme_key)
+            if paired:
+                try:
+                    mlst_companion = await asyncio.get_running_loop().run_in_executor(
+                        None, pull_scheme, paired,
+                    )
+                    job.message = (
+                        f"Auto-paired classical MLST: {mlst_companion.name} "
+                        f"({len(mlst_companion.loci)} loci)"
+                    )
+                    job.notify()
+                except Exception as e:
+                    log.warning("Could not auto-pair MLST scheme %s: %s", paired, e)
+
         # 2. Scan folder
         samples = scan(job.folder)
         if not samples:
@@ -192,6 +215,26 @@ async def _run_job(job: Job) -> None:
                     result = await loop.run_in_executor(
                         executor, caller, sample.assembly, scheme, None, max(1, t // 2),
                     )
+
+                # When a cgMLST scheme has an auto-paired classical MLST, run
+                # the 7-gene call too and graft the classical ST onto the
+                # cgMLST result. The user gets *both* an ST and a cgST in the
+                # GUI without ever having to launch two analyses.
+                if mlst_companion is not None and scheme.kind == "cgmlst":
+                    try:
+                        mlst_res = await loop.run_in_executor(
+                            executor, call_mlst, sample.assembly, mlst_companion,
+                            None, max(1, t // 2),
+                        )
+                        result.mlst_scheme = mlst_companion.name
+                        result.mlst_st = mlst_res.st
+                        result.st = mlst_res.st            # primary ST column
+                        result.notes.append(
+                            f"MLST ({mlst_companion.name}): "
+                            f"ST {mlst_res.st or '?'}"
+                        )
+                    except Exception as e:
+                        log.warning("Companion MLST failed for %s: %s", sample.name, e)
 
                 # Optional AMRFinderPlus pass (display only — never feeds the MST)
                 if job.run_amr:
@@ -256,6 +299,9 @@ async def _run_job(job: Job) -> None:
                     "sample": result.sample,
                     "st": result.st,
                     "scheme": result.scheme,
+                    "cgst": result.cgst,
+                    "mlst_st": result.mlst_st,
+                    "mlst_scheme": result.mlst_scheme,
                     "calls": {loc: asdict(c) for loc, c in result.calls.items()},
                     "notes": result.notes,
                     "input": _sample_to_dict(sample),
