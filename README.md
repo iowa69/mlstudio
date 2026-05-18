@@ -40,14 +40,22 @@ Per-isolate Sequence Types, per-locus allele calls, EXC/INF/LNF flags, and free-
 ```bash
 # Option A — Bioconda (recommended once the PR lands)
 conda install -c bioconda mlstudio
+amrfinder -u            # one-time, ~250 MB, only if you'll use the AMR scan
 mlstudio gui
 
 # Option B — from source
 git clone https://github.com/iowa69/mlstudio.git && cd mlstudio
-./setup.sh           # creates the `mlstudio` conda env with all bio + Python deps
+./setup.sh              # creates the `mlstudio` conda env with all bio + Python deps
 conda activate mlstudio
-mlstudio gui         # opens http://127.0.0.1:<port>/ in your default browser
+pip install -e .        # editable install — source edits are picked up live
+amrfinder -u            # one-time, ~250 MB, only if you'll use the AMR scan
+mlstudio gui            # opens http://127.0.0.1:<port>/ in your default browser
 ```
+
+> The first time you tick **Run AMR gene scan**, MLSTudio needs the AMRFinderPlus
+> database to be present (`amrfinder -u` fetches it). Skipping that step is a
+> common cause of "AMR=0 across the board" — the GUI will show a yellow banner
+> on the AMR tab when this is the issue.
 
 A browser window opens. From there:
 
@@ -247,20 +255,43 @@ AMRFinderPlus must be installed (`conda install -c bioconda ncbi-amrfinderplus` 
                 └─────────────────────┘
 ```
 
-cgMLST scales to 1000+ loci via a **single concatenated BLAST database** per scheme: one BLAST call per genome instead of one per locus, then results grouped by locus identifier. With 24 cores, 67 *S. aureus* genomes against the 1716-locus scheme finishes in ~25 minutes.
+cgMLST uses the chewBBACA-style **predict-then-BLAST** workflow: prodigal extracts the ~5 000 predicted CDS from each assembly (cached on disk per-sample), then each CDS is BLASTed (megablast, multi-thread, parallel across batched per-100-loci allele DBs) against the scheme. Because each CDS naturally matches alleles of one locus, the `-max_target_seqs` cap operates per-query and never saturates — the single-locus saturation that earlier broke calling on hyper-variable schemes (Klebsiella pneumoniae, 4 500+ alleles per locus) is gone.
+
+## Performance
+
+Per-sample wall-clock on 12 threads, against the cgMLST.org KP-complex scheme (2 358 loci, 100 K+ alleles in the DB):
+
+| | time per sample | call rate |
+|---|---:|---:|
+| Cold (fresh sample, no prodigal cache) | **~11 s** | 97.6 % |
+| Warm (prodigal cache present, same scheme) | **~5 s** | 97.6 % |
+
+Subsequent samples against the same scheme reuse the batched BLAST DBs (saved across runs) and a per-sample prodigal-CDS cache (keyed by file size + mtime), so an 18-sample VRE outbreak panel goes through in well under a minute on a modest workstation.
 
 ## Tested on
 
-- *S. aureus* cgMLST (1716 loci) on 67 clinical isolates → 27+ distinct clusters identified at distance 5
-- *L. monocytogenes* MLST (7 loci) on reference assemblies → correct STs (EGD-e ST 35, 10403S ST 85, F2365 ST 1)
+- *Klebsiella pneumoniae* cgMLST (2 358 loci, cgMLST.org) on 20 KP genomes → 97.6 % EXC + 0.6 % INF, 2.4 % LNF; identical-genotype collapses + tight outbreak clusters at distance 5.
+- *Enterococcus faecium* cgMLST (1 423 loci, cgMLST.org) on 18 VREfm-ST1478 isolates → 99.3 % called; vanR-A / vanS-A flagged by AMRFinderPlus on every isolate; tight outbreak cluster (median 3 alleles).
+- *S. aureus* cgMLST (1 716 loci, PubMLST) on 67 clinical isolates → 27+ distinct clusters identified at distance 5.
+- *L. monocytogenes* MLST (7 loci) on reference assemblies → correct STs (EGD-e ST 35, 10403S ST 85, F2365 ST 1).
+
+## What's new in 1.3.1
+
+- **cgMLST calling correctness fix.** Previous BLAST-the-whole-assembly workflow silently dropped 90 %+ of loci on hyper-variable schemes (KP, Efaecium) because `-max_target_seqs` saturated on the one or two highest-variation loci per batch DB. Switched to chewBBACA-style prodigal CDS prediction → per-CDS BLAST, where the cap operates per query and never saturates.
+- **~75× faster cgMLST.** megablast instead of blastn + concurrent batched BLAST via ThreadPoolExecutor. KP1057 vs the full KP cgMLST scheme: 13 min 30 s → 11 s on a fresh sample, ~5 s when warm.
+- **Per-tab contextual GUI.** Setup / MST / Table / AMR / Statistics tabs, each with its own sidebar panel. The Setup tab is the new landing page with a step-by-step checklist.
+- **AMR matrix tab.** Sample × gene matrix with sticky labels, colored cells per calling method (EXACT / BLAST / PARTIAL), filters by element type / method / gene search, full TSV export. AMR never feeds the MST distance.
+- **`mlstudio schemes pull-eskapee`.** One-command bulk pull of the 7 WHO ESKAPEE cgMLST schemes from cgMLST.org.
+- **Halo + zoom + drag fixes.** Cluster halo redraw, MST interactivity, and tab-switch resize bugs all closed out.
 
 ## What's planned
 
 - [ ] Bowtie2 read-backed rescue for missing/spurious alleles
 - [ ] Species auto-detection from the assembly (BLAST against all cached scheme allele DBs in parallel)
+- [ ] Neighbour-joining tree as an alternative to the MST
 - [x] SVG export
 - [x] Pie-chart composite nodes when grouping by metadata field
-- [x] Bioconda recipe (staged in `recipe/`, PR pending the first PyPI release)
+- [x] Bioconda recipe (staged in `recipe/`, PR open at bioconda/bioconda-recipes#65485)
 - [ ] AppImage
 
 ## License
