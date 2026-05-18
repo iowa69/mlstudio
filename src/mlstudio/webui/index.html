@@ -28,13 +28,13 @@
 
 <main class="layout">
   <aside class="sidebar">
-    <section class="panel">
-      <h2>0 · Projects</h2>
+    <section class="panel" data-for="setup tree table amr stats">
+      <h2>Projects</h2>
       <div id="project-list" class="project-list"></div>
       <button id="save-project-btn" class="primary" style="margin-top:8px;width:100%" disabled>Save current as project…</button>
     </section>
 
-    <section class="panel">
+    <section class="panel" data-for="setup">
       <h2>1 · Input folder</h2>
       <label class="field">
         <span>Folder path</span>
@@ -47,13 +47,13 @@
       <div id="scan-result" class="muted small" style="margin-top:8px"></div>
     </section>
 
-    <section class="panel">
+    <section class="panel" data-for="setup">
       <h2>2 · Scheme</h2>
       <select id="scheme-select"></select>
       <p class="muted small" style="margin:6px 0 0 0">First use triggers a one-time download.</p>
     </section>
 
-    <section class="panel">
+    <section class="panel" data-for="setup">
       <h2>3 · Options</h2>
       <label class="field">
         <span>Project name (also used to save)</span>
@@ -80,7 +80,7 @@
       </label>
     </section>
 
-    <section class="panel sticky-run">
+    <section class="panel sticky-run" data-for="setup tree table amr stats">
       <button id="run-btn" class="primary large" disabled>▶  Analyze</button>
       <div class="run-actions">
         <button id="rerun-btn" class="ghost small" disabled title="Re-run analysis with the current parameters">↻ Re-run</button>
@@ -93,14 +93,14 @@
       </div>
     </section>
 
-    <section class="panel">
-      <h2>4 · Metadata</h2>
+    <section class="panel" data-for="setup tree table">
+      <h2>Metadata</h2>
       <input id="meta-file" type="file" accept=".csv,.tsv" />
       <p class="muted small" style="margin:6px 0 0 0">First column = sample name. Remaining columns become color fields.</p>
     </section>
 
-    <section class="panel">
-      <h2>5 · Distance</h2>
+    <section class="panel" data-for="tree">
+      <h2>Distance</h2>
       <label class="field">
         <span>Missing-data policy</span>
         <select id="distance-policy">
@@ -113,8 +113,8 @@
       <div class="muted small" id="policy-status"></div>
     </section>
 
-    <section class="panel">
-      <h2>6 · Display</h2>
+    <section class="panel" data-for="tree">
+      <h2>MST display</h2>
       <label class="field">
         <span>Color nodes by</span>
         <select id="color-field"><option value="cluster_id">cluster_id</option><option value="st">ST</option></select>
@@ -178,23 +178,110 @@
       <button id="export-svg" class="ghost">Export SVG</button>
     </section>
 
-    <section class="panel">
-      <h2>7 · Scheme catalog</h2>
+    <section class="panel" data-for="setup">
+      <h2>Scheme catalog</h2>
       <div id="catalog-list"></div>
       <button id="discover-btn" class="ghost" style="margin-top:8px;width:100%">
         Browse all PubMLST schemes…
       </button>
     </section>
+
+    <!-- ===== Table tab sidebar ===== -->
+    <section class="panel" data-for="table">
+      <h2>Table controls</h2>
+      <label class="check inline"><input type="checkbox" id="show-all-loci-side" /> Show every locus column</label>
+      <label class="field" style="margin-top:8px">
+        <span>Search</span>
+        <input id="table-search" type="text" placeholder="Sample name or value…" />
+      </label>
+      <label class="field">
+        <span>Color by</span>
+        <select id="color-field-table"><option value="cluster_id">cluster_id</option></select>
+      </label>
+      <button id="export-tsv-side" class="ghost" style="width:100%">⤓ Export TSV (all hits)</button>
+    </section>
+
+    <!-- ===== AMR tab sidebar ===== -->
+    <section class="panel" data-for="amr">
+      <h2>AMR filters</h2>
+      <label class="field">
+        <span>Element type</span>
+        <select id="amr-type">
+          <option value="">all</option>
+          <option value="AMR">AMR (resistance) only</option>
+          <option value="STRESS">stress only</option>
+          <option value="VIRULENCE">virulence only</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Method (calling)</span>
+        <select id="amr-method">
+          <option value="">all</option>
+          <option value="EXACTX">exact only</option>
+          <option value="BLASTX">BLAST</option>
+          <option value="PARTIALX">partial</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Search gene</span>
+        <input id="amr-search" type="text" placeholder="blaCTX-M, mecA…" />
+      </label>
+      <button id="export-amr-tsv" class="ghost" style="width:100%">⤓ Export AMR TSV</button>
+      <p class="muted small" style="margin:8px 0 0 0">AMR hits never affect the MST distance — they're shown alongside typing only.</p>
+    </section>
+
+    <!-- ===== Stats tab sidebar ===== -->
+    <section class="panel" data-for="stats">
+      <h2>Statistics view</h2>
+      <label class="field">
+        <span>Show</span>
+        <select id="stats-view">
+          <option value="overview" selected>Overview</option>
+          <option value="quality">Per-sample call quality</option>
+          <option value="loci">Per-locus call rate</option>
+          <option value="clusters">Cluster size distribution</option>
+        </select>
+      </label>
+    </section>
   </aside>
 
   <section class="viewport">
     <nav class="tabs">
-      <button class="tab active" data-tab="tree">Tree</button>
-      <button class="tab" data-tab="table">Comparison Table</button>
-      <button class="tab" data-tab="stats">Statistics</button>
+      <button class="tab active" data-tab="setup">📋 Setup</button>
+      <button class="tab" data-tab="tree">🌳 MST</button>
+      <button class="tab" data-tab="table">📊 Table</button>
+      <button class="tab" data-tab="amr">💊 AMR</button>
+      <button class="tab" data-tab="stats">📈 Statistics</button>
     </nav>
 
-    <div id="tab-tree" class="tab-pane active">
+    <!-- Setup / Welcome tab — the default landing -->
+    <div id="tab-setup" class="tab-pane active">
+      <div class="setup-wrap">
+        <div class="setup-card">
+          <h2>Welcome to MLSTudio</h2>
+          <p class="muted">A guided 4-step workflow gets you from a folder of assemblies to an interactive minimum spanning tree.</p>
+          <ol class="setup-checklist">
+            <li id="step-1"><span class="num">1</span><div><b>Pick an input folder.</b> Use the sidebar's <em>1 · Input folder</em> panel → click <code>Browse…</code> and select a folder of <code>.fasta</code> assemblies (optionally with paired <code>_R1/_R2.fastq.gz</code> reads).</div></li>
+            <li id="step-2"><span class="num">2</span><div><b>Pick a scheme.</b> The <em>2 · Scheme</em> dropdown shows everything cached locally. To grab a new one, use the <em>Scheme catalog</em> panel or run <code>mlstudio schemes pull-eskapee</code>.</div></li>
+            <li id="step-3"><span class="num">3</span><div><b>Set options.</b> Defaults are sensible: <em>auto-tuned identity/coverage</em>, all cores, no AMR. Toggle the AMR scan on if you want resistance genes alongside typing.</div></li>
+            <li id="step-4"><span class="num">4</span><div><b>(Optional) Metadata CSV.</b> First column = sample name; every other column becomes a colorable field on the tree.</div></li>
+            <li id="step-5"><span class="num">▶</span><div><b>Click Analyze.</b> Progress streams over WebSocket. When the run finishes you'll be flipped to the <em>MST</em> tab automatically.</div></li>
+          </ol>
+        </div>
+        <div class="setup-card setup-tip">
+          <h3>What you get</h3>
+          <ul>
+            <li>🌳 <b>MST</b> — interactive minimum spanning tree, cluster halos, drag-to-pin nodes, live colour-by.</li>
+            <li>📊 <b>Table</b> — per-sample ST + per-locus allele matrix, cluster-tinted rows, full-hits TSV export.</li>
+            <li>💊 <b>AMR</b> — gene-by-sample matrix from AMRFinderPlus, never contributing to the MST distance.</li>
+            <li>📈 <b>Statistics</b> — call-quality histograms, cluster size distribution, per-locus call rate.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- MST / Tree tab -->
+    <div id="tab-tree" class="tab-pane">
       <div id="cy"></div>
       <div id="zoom-dial" class="zoom-dial" title="Zoom">
         <button id="zoom-in"  class="zoom-btn" title="Zoom in (+)">+</button>
@@ -203,17 +290,12 @@
       </div>
       <div id="legend" class="legend hidden"></div>
       <div id="empty-state" class="empty-state">
-        <h2>Welcome</h2>
-        <ol>
-          <li>Click <b>Browse</b> and pick a folder of <code>.fasta</code> assemblies.</li>
-          <li>Pick an MLST or cgMLST scheme — or build one from a reference (<code>schemes build-adhoc</code>).</li>
-          <li>Click <b>Analyze</b>.</li>
-          <li>Upload a metadata CSV to color the tree. Adjust the cluster halo distance to highlight outbreak clusters.</li>
-        </ol>
-        <p class="muted small">Re-running on the same folder is incremental — only new isolates get typed.</p>
+        <h2>No analysis yet</h2>
+        <p>Switch to the <b>Setup</b> tab and run an analysis. The tree appears here when it finishes.</p>
       </div>
     </div>
 
+    <!-- Comparison Table tab -->
     <div id="tab-table" class="tab-pane">
       <div class="tab-toolbar">
         <label class="check inline"><input type="checkbox" id="show-all-loci" /> Show every locus</label>
@@ -222,6 +304,16 @@
         <button id="export-tsv-btn" class="ghost small">⤓ Export TSV (all hits)</button>
       </div>
       <div id="comparison-table" class="comparison-table"></div>
+    </div>
+
+    <!-- AMR tab — sample × gene matrix -->
+    <div id="tab-amr" class="tab-pane">
+      <div class="tab-toolbar">
+        <span class="muted small" id="amr-summary"></span>
+        <span style="flex:1"></span>
+        <button id="export-amr-tsv-btn" class="ghost small">⤓ Export AMR TSV</button>
+      </div>
+      <div id="amr-content" class="amr-content"></div>
     </div>
 
     <div id="tab-stats" class="tab-pane">

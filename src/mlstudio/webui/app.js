@@ -379,6 +379,9 @@ function subscribe(jobId) {
       $('save-project-btn').disabled = false;
       if ($('rerun-btn'))         $('rerun-btn').disabled = false;
       if ($('change-scheme-btn')) $('change-scheme-btn').disabled = false;
+      // Flip to the MST tab automatically — the user just spent N minutes
+      // running an analysis, the next thing they want to see is the tree.
+      activateTab('tree');
       const result = await api('/jobs/' + jobId);
       state.results = result.results;
       state.mst = result.mst;
@@ -403,20 +406,37 @@ function subscribe(jobId) {
   ws.onerror = () => setStatus('error', 'WebSocket error');
 }
 
-// ---- Tabs -----------------------------------------------------------------
+// ---- Tabs + per-tab contextual sidebar ----------------------------------
 
-document.querySelectorAll('.tab').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const t = btn.dataset.tab;
-    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
-    document.querySelectorAll('.tab-pane').forEach(p => {
-      p.classList.toggle('active', p.id === `tab-${t}`);
-    });
-    if (t === 'table') renderComparisonTable();
-    if (t === 'stats') renderStats();
-    if (t === 'tree' && state.cy) { state.cy.resize(); state.cy.fit(null, 50); }
+function activateTab(t) {
+  document.querySelectorAll('.tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === t));
+  document.querySelectorAll('.tab-pane').forEach(p =>
+    p.classList.toggle('active', p.id === `tab-${t}`));
+  // Sidebar panels are tagged with data-for="setup tree …" — show only
+  // those that include the active tab. Untagged panels stay visible
+  // everywhere (legacy fallback).
+  document.querySelectorAll('.sidebar .panel').forEach(panel => {
+    const tags = (panel.getAttribute('data-for') || '').split(/\s+/).filter(Boolean);
+    panel.style.display = (tags.length === 0 || tags.includes(t)) ? '' : 'none';
   });
+  if (t === 'table') renderComparisonTable();
+  if (t === 'stats') renderStats();
+  if (t === 'amr')   renderAmrMatrix();
+  if (t === 'tree' && state.cy) {
+    // Resize + refit when becoming visible — Cytoscape sometimes ends up
+    // sized to a hidden container if the tab was inactive at init time.
+    state.cy.resize();
+    state.cy.fit(null, 50);
+    redrawHulls();
+    updateZoomReadout();
+  }
+}
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => activateTab(btn.dataset.tab));
 });
+// Apply the initial visibility on load.
+activateTab(document.querySelector('.tab.active')?.dataset.tab || 'setup');
 
 // ---- Comparison table ---------------------------------------------------
 
@@ -532,6 +552,111 @@ function renderComparisonTable() {
     });
   });
 }
+
+// ---- AMR tab — sample × gene matrix --------------------------------------
+
+function renderAmrMatrix() {
+  const root = $('amr-content');
+  const summaryEl = $('amr-summary');
+  const amr = state.amr_results || {};
+  const samples = state.results.map(r => r.sample);
+  if (!samples.length || !Object.keys(amr).length) {
+    root.innerHTML = '<p class="muted">No AMR results. Tick <b>Run AMR gene scan</b> in <i>Setup → 3 · Options</i> and re-run.</p>';
+    if (summaryEl) summaryEl.textContent = '';
+    return;
+  }
+
+  // Filters from the sidebar
+  const typeFilter   = $('amr-type')?.value || '';
+  const methodFilter = $('amr-method')?.value || '';
+  const search       = ($('amr-search')?.value || '').toLowerCase().trim();
+
+  // Collect distinct genes across all samples, applying filters
+  const geneCounts = {};
+  for (const s of samples) {
+    for (const h of (amr[s] || [])) {
+      if (typeFilter && (h.element_type || h.type) !== typeFilter) continue;
+      if (methodFilter && !(h.method || '').startsWith(methodFilter.replace('X', ''))) continue;
+      if (search && !(h.gene_symbol || '').toLowerCase().includes(search)) continue;
+      const g = h.gene_symbol || '?';
+      geneCounts[g] = (geneCounts[g] || 0) + 1;
+    }
+  }
+  const genes = Object.keys(geneCounts).sort((a, b) => geneCounts[b] - geneCounts[a]);
+  if (summaryEl) {
+    const totalHits = Object.values(geneCounts).reduce((s, v) => s + v, 0);
+    summaryEl.textContent = `${samples.length} samples · ${genes.length} distinct genes · ${totalHits} hits`;
+  }
+  if (!genes.length) {
+    root.innerHTML = '<p class="muted">No AMR hits match the current filters.</p>';
+    return;
+  }
+
+  // Build matrix: rows = samples, cols = genes. Mark hits as solid swatches.
+  const idxBySample = new Map(samples.map((s, i) => [s, i]));
+  const m = samples.map(() => Array(genes.length).fill(null));
+  for (const s of samples) {
+    for (const h of (amr[s] || [])) {
+      if (typeFilter && (h.element_type || h.type) !== typeFilter) continue;
+      if (methodFilter && !(h.method || '').startsWith(methodFilter.replace('X', ''))) continue;
+      if (search && !(h.gene_symbol || '').toLowerCase().includes(search)) continue;
+      const gi = genes.indexOf(h.gene_symbol);
+      const si = idxBySample.get(s);
+      if (gi < 0 || si === undefined) continue;
+      const prior = m[si][gi];
+      // Prefer EXACTX > BLASTX > PARTIALX visually
+      const rank = mt => mt?.startsWith('EXACT') ? 3 : mt?.startsWith('BLAST') ? 2 : mt?.startsWith('PARTIAL') ? 1 : 0;
+      if (!prior || rank(h.method) > rank(prior.method)) m[si][gi] = h;
+    }
+  }
+
+  const html = ['<table class="amr-matrix"><thead><tr><th>Sample</th>'];
+  for (const g of genes) html.push(`<th title="${geneCounts[g]} sample(s) hit">${g}</th>`);
+  html.push('</tr></thead><tbody>');
+  for (let si = 0; si < samples.length; si++) {
+    html.push(`<tr><th class="sample">${samples[si]}</th>`);
+    for (let gi = 0; gi < genes.length; gi++) {
+      const h = m[si][gi];
+      if (!h) { html.push('<td class="empty"></td>'); continue; }
+      const cls = h.method?.startsWith('EXACT') ? 'exact'
+                : h.method?.startsWith('PARTIAL') ? 'partial' : 'blast';
+      const tip = `${h.gene_symbol} · ${h.method} · ${h.percent_identity}% / ${h.percent_coverage}% cov` +
+                  (h.class_ ? ` · ${h.class_}` : '');
+      html.push(`<td class="hit ${cls}" title="${tip}"></td>`);
+    }
+    html.push('</tr>');
+  }
+  html.push('</tbody></table>');
+  root.innerHTML = html.join('');
+}
+
+// Sidebar AMR filter wiring — anything that changes re-renders the matrix.
+['amr-type', 'amr-method', 'amr-search'].forEach(id =>
+  $(id)?.addEventListener('input', () => renderAmrMatrix()));
+
+// Export AMR TSV (long-format: sample, gene, class, method, identity, coverage)
+function exportAmrTsv() {
+  const amr = state.amr_results || {};
+  if (!Object.keys(amr).length) { alert('No AMR results to export.'); return; }
+  const rows = ['sample\tgene_symbol\tsequence_name\telement_type\tclass\tsubclass\tmethod\tpercent_identity\tpercent_coverage'];
+  for (const sample of Object.keys(amr)) {
+    for (const h of amr[sample]) {
+      rows.push([sample, h.gene_symbol || '', h.sequence_name || '',
+                 h.element_type || h.type || '',
+                 h.class_ || h.class || '', h.subclass || '',
+                 h.method || '', h.percent_identity ?? '', h.percent_coverage ?? ''].join('\t'));
+    }
+  }
+  const blob = new Blob([rows.join('\n')], { type: 'text/tab-separated-values' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${$('project-name').value.trim() || 'mlstudio'}_amr.tsv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+$('export-amr-tsv')?.addEventListener('click', exportAmrTsv);
+$('export-amr-tsv-btn')?.addEventListener('click', exportAmrTsv);
 
 // ---- Statistics tab -----------------------------------------------------
 
@@ -1539,6 +1664,36 @@ $('export-tsv-btn')?.addEventListener('click', () => {
 // Toggle full per-locus rendering of the comparison table.
 $('show-all-loci')?.addEventListener('change', () => renderComparisonTable());
 
+// Sidebar mirrors of the table toolbar controls. Each side mirrors the
+// other so the user can drive from either surface and see consistent
+// state. Sidebar version of the search input filters table rows.
+function _bindMirror(idA, idB, prop) {
+  const a = $(idA), b = $(idB);
+  if (!a || !b) return;
+  const sync = (src, dst, ev) => () => { dst[prop] = src[prop]; dst.dispatchEvent(new Event(ev)); };
+  a.addEventListener('input',  sync(a, b, 'input'));
+  a.addEventListener('change', sync(a, b, 'change'));
+  b.addEventListener('input',  sync(b, a, 'input'));
+  b.addEventListener('change', sync(b, a, 'change'));
+}
+_bindMirror('show-all-loci', 'show-all-loci-side', 'checked');
+
+// Sidebar table search filters renderComparisonTable on each keystroke.
+$('table-search')?.addEventListener('input', () => renderComparisonTable());
+
+// Sidebar color-by mirror — keep both selects in sync, applyColoring uses
+// the main one as the source of truth.
+$('color-field-table')?.addEventListener('change', (e) => {
+  const main = $('color-field');
+  if (main) {
+    main.value = e.target.value;
+    applyColoring();
+    renderComparisonTable();
+  }
+});
+// Stats view selector — picks which view renderStats produces.
+$('stats-view')?.addEventListener('change', () => renderStats());
+
 $('relax-btn').addEventListener('click', () => {
   if (!state.cy) return;
   const nNodes = state.cy.nodes(':childless').length;
@@ -1573,8 +1728,40 @@ _liveReadout('node-scale',   'node-scale-val',   v => parseFloat(v).toFixed(2) +
 _liveReadout('label-scale',  'label-scale-val',  v => parseFloat(v).toFixed(2) + '×');
 _liveReadout('edge-scale',   'edge-scale-val',   v => parseFloat(v).toFixed(1) + '×');
 
-// Layout-algorithm change re-renders immediately (it changes the topology
-// of where nodes land, which the user expects to see right away).
+// Live restyle when the scale sliders move — much cheaper than rebuilding
+// the whole Cytoscape instance. The user gets immediate feedback on every
+// tick of the slider.
+function _applyLiveScale() {
+  if (!state.cy) return;
+  const nNodes = state.cy.nodes(':childless').length;
+  const scale = applyUserScale(autoScale(nNodes));
+  state.scale = scale;
+  state.maxEdge = state.maxEdge || 1;
+  state.cy.batch(() => {
+    state.cy.nodes().style({
+      'width':  (ele) => scale.nodeSize * Math.sqrt(ele.data('size') || 1),
+      'height': (ele) => scale.nodeSize * Math.sqrt(ele.data('size') || 1),
+      'font-size': scale.fontSize + 'px',
+    });
+    state.cy.edges().style({
+      'width': (ele) => {
+        const w = ele.data('weight');
+        const norm = w / Math.max(1, state.maxEdge);
+        return Math.max(0.8, scale.edgeMax * (1 - 0.7 * norm));
+      },
+      'font-size': scale.fontSize + 'px',
+    });
+  });
+  redrawHulls();
+}
+$('node-scale')?.addEventListener('input',  _applyLiveScale);
+$('label-scale')?.addEventListener('input', _applyLiveScale);
+$('edge-scale')?.addEventListener('input',  _applyLiveScale);
+
+// Layout-algorithm and iteration changes require a fresh layout pass.
+// Algorithm change is rare so we just re-render; iterations only kicks in
+// when the user explicitly clicks "Relax layout", to avoid hammering the
+// layout engine on every tick of the slider.
 $('layout-algo')?.addEventListener('change', () => {
   if (state.mst) renderMst();
 });

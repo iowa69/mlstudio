@@ -290,3 +290,88 @@ select.attention { animation: pulseRing 1.1s ease-out 1; outline: 2px solid #3b8
   font-variant-numeric: tabular-nums;
   background: var(--panel);
 }
+
+/* ---- Setup tab landing page --------------------------------------------- */
+.setup-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 18px;
+  padding: 22px;
+  align-items: start;
+  height: 100%;
+  overflow-y: auto;
+}
+.setup-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 24px;
+  box-shadow: 0 1px 0 rgba(15,23,42,0.03);
+}
+.setup-card h2 { margin: 0 0 6px 0; font-size: 22px; }
+.setup-card h3 { margin: 0 0 12px 0; font-size: 15px; color: var(--text-muted); }
+.setup-card > p.muted { margin: 0 0 16px 0; }
+.setup-checklist { list-style: none; padding: 0; margin: 8px 0 0 0; counter-reset: step; }
+.setup-checklist li {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 12px 14px; margin: 6px 0;
+  background: var(--panel-2);
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: background 120ms, border-color 120ms;
+}
+.setup-checklist li:hover { background: var(--panel); border-color: var(--border); }
+.setup-checklist .num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex-shrink: 0;
+  background: #3b82f6; color: white; border-radius: 50%;
+  font-weight: 700; font-size: 13px;
+}
+.setup-checklist li > div { font-size: 13px; line-height: 1.55; }
+.setup-checklist li code, .setup-tip code { font-size: 12px; }
+.setup-tip ul { padding-left: 18px; margin: 4px 0; font-size: 13px; line-height: 1.7; }
+
+/* ---- AMR matrix --------------------------------------------------------- */
+.amr-content { padding: 12px 14px; overflow: auto; height: calc(100% - 50px); }
+.amr-matrix { border-collapse: collapse; font-size: 11px; }
+.amr-matrix th, .amr-matrix td { padding: 0; }
+.amr-matrix thead th {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 6px 9px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  /* Diagonally rotated gene labels keep the table dense */
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  position: sticky; top: 0;
+  z-index: 1;
+}
+.amr-matrix thead th:first-child {
+  writing-mode: horizontal-tb;
+  transform: none;
+  text-align: left;
+  min-width: 130px;
+}
+.amr-matrix tbody th.sample {
+  padding: 4px 8px;
+  font-weight: 500;
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-align: left;
+  background: var(--panel);
+  position: sticky; left: 0;
+  z-index: 1;
+}
+.amr-matrix td { width: 14px; height: 22px; border: 1px solid #f1f5f9; }
+.amr-matrix td.hit.exact   { background: #16a34a; }   /* solid green */
+.amr-matrix td.hit.blast   { background: #65a30d; }   /* lime */
+.amr-matrix td.hit.partial { background: #fbbf24; }   /* amber */
+.amr-matrix td.empty       { background: #fafafa; }
+.amr-matrix tr:hover td.empty { background: #f1f5f9; }
+
+/* Slightly larger toolbar for the new tabs */
+.tab-toolbar { font-size: 12px; gap: 10px; }
