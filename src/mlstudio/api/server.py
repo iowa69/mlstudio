@@ -739,16 +739,21 @@ def create_app() -> FastAPI:
 
         @app.get("/")
         async def index():
-            # Rewrite the static-asset URLs with a per-version query string so
-            # browsers reliably pick up new app.js / style.css after a release
-            # instead of serving the cached previous version. Falls back to
-            # serving the raw file if templating fails for any reason.
+            # Rewrite the static-asset URLs with a per-file mtime cache-busting
+            # token so every edit to app.js / style.css gets a fresh URL and
+            # the browser can't serve a stale cached copy. (A fixed
+            # ?v={__version__} was useless for our editable-install workflow:
+            # every push since v1.3.0 has been the same version, so Chrome
+            # served the cached JS regardless of Cache-Control headers.)
             try:
                 html = (frontend_dir / "index.html").read_text()
+                def _bust(name: str) -> str:
+                    p = frontend_dir / name
+                    return f"{int(p.stat().st_mtime)}" if p.exists() else "0"
                 html = html.replace('/static/app.js',
-                                    f'/static/app.js?v={__version__}')
+                                    f'/static/app.js?v={_bust("app.js")}')
                 html = html.replace('/static/style.css',
-                                    f'/static/style.css?v={__version__}')
+                                    f'/static/style.css?v={_bust("style.css")}')
                 from fastapi.responses import HTMLResponse
                 return HTMLResponse(html, headers={"Cache-Control": "no-store"})
             except Exception:
