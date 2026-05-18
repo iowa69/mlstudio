@@ -70,6 +70,7 @@ class Job:
         self.message = ""
         self.results: list[dict[str, Any]] = []
         self.amr_results: dict[str, list[dict[str, Any]]] = {}
+        self.amr_warning: str | None = None
         self.mst: dict[str, Any] | None = None
         self.metadata: dict[str, dict[str, Any]] = {}
         self.profiles: dict[str, list[str | None]] = {}
@@ -186,25 +187,56 @@ async def _run_job(job: Job) -> None:
                         executor, caller, sample.assembly, scheme, None, max(1, t // 2),
                     )
 
-                # Optional AMRFinderPlus pass (display only)
-                if job.run_amr and amrfinder_available():
-                    org_key = scheme.organism.split()[0].lower() + scheme.organism.split()[-1][0:0]
-                    org_prefix = job.scheme_key.split("_")[0]
-                    org = ORGANISM_MAP.get(org_prefix)
-                    try:
-                        amr = await loop.run_in_executor(
-                            executor, run_amrfinderplus, sample.assembly, org,
-                            min(4, job.threads or 4), None,
-                        )
-                        job.amr_results[sample.name] = [
-                            {"gene": h.gene_symbol, "class": h.class_,
-                             "subclass": h.subclass, "method": h.method,
-                             "pident": h.percent_identity,
-                             "pcov": h.percent_coverage}
-                            for h in amr.hits
-                        ]
-                    except Exception as e:
-                        log.warning("AMRFinderPlus failed for %s: %s", sample.name, e)
+                # Optional AMRFinderPlus pass (display only — never feeds the MST)
+                if job.run_amr:
+                    if not amrfinder_available():
+                        # Surface the skip loudly and visibly so the user knows
+                        # why AMR=0 across the board instead of debugging the
+                        # GUI. Add it once to the job message; per-sample notes
+                        # don't exist for AMR.
+                        if not getattr(job, "_amr_unavail_logged", False):
+                            log.warning(
+                                "Run AMR requested but `amrfinder` is not on PATH. "
+                                "Install with `conda install -c bioconda ncbi-amrfinderplus`."
+                            )
+                            job._amr_unavail_logged = True
+                            # Persist the warning on the job snapshot so the UI
+                            # can show it.
+                            job.amr_warning = (
+                                "AMR scan was requested but the `amrfinder` "
+                                "binary isn't installed. Install with "
+                                "`conda install -c bioconda ncbi-amrfinderplus` "
+                                "and then `amrfinder -u` to fetch the database."
+                            )
+                    else:
+                        org_prefix = job.scheme_key.split("_")[0]
+                        org = ORGANISM_MAP.get(org_prefix)
+                        try:
+                            amr = await loop.run_in_executor(
+                                executor, run_amrfinderplus, sample.assembly, org,
+                                min(4, job.threads or 4), None,
+                            )
+                            # Use the canonical AmrHit field names verbatim so
+                            # the frontend's AMR matrix can read them without
+                            # mapping. Previous code shipped truncated keys
+                            # (gene/class/pident) that the matrix didn't know.
+                            job.amr_results[sample.name] = [
+                                {
+                                    "gene_symbol": h.gene_symbol,
+                                    "sequence_name": h.sequence_name,
+                                    "scope": h.scope,
+                                    "element_type": h.element_type,
+                                    "element_subtype": h.element_subtype,
+                                    "class_": h.class_,
+                                    "subclass": h.subclass,
+                                    "method": h.method,
+                                    "percent_identity": h.percent_identity,
+                                    "percent_coverage": h.percent_coverage,
+                                }
+                                for h in amr.hits
+                            ]
+                        except Exception as e:
+                            log.warning("AMRFinderPlus failed for %s: %s", sample.name, e)
                 result_dict = {
                     "sample": result.sample,
                     "st": result.st,
@@ -615,6 +647,7 @@ def create_app() -> FastAPI:
         snap["results"] = job.results
         snap["mst"] = job.mst
         snap["amr"] = job.amr_results
+        snap["amr_warning"] = job.amr_warning
         snap["output_folder"] = str(job.output_folder)
         return snap
 

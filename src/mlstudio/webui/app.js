@@ -386,6 +386,10 @@ function subscribe(jobId) {
       state.results = result.results;
       state.mst = result.mst;
       state.amr_results = result.amr || {};
+      // Surface an AMR-unavailable warning on the AMR tab so the user
+      // doesn't think the empty result means "no resistance genes"
+      // when in reality the scan never ran.
+      state.amr_warning = result.amr_warning || null;
       // Compute cluster_id from current scheme threshold if not present
       const nodes = state.mst.elements.filter(e => !e.data.source);
       if (!nodes.some(n => n.data.cluster_id)) {
@@ -560,8 +564,15 @@ function renderAmrMatrix() {
   const summaryEl = $('amr-summary');
   const amr = state.amr_results || {};
   const samples = state.results.map(r => r.sample);
+  const banner = state.amr_warning
+    ? `<div class="banner warning">⚠ ${state.amr_warning}</div>`
+    : '';
   if (!samples.length || !Object.keys(amr).length) {
-    root.innerHTML = '<p class="muted">No AMR results. Tick <b>Run AMR gene scan</b> in <i>Setup → 3 · Options</i> and re-run.</p>';
+    if (state.amr_warning) {
+      root.innerHTML = banner + '<p class="muted">No AMR hits to display.</p>';
+    } else {
+      root.innerHTML = '<p class="muted">No AMR results. Tick <b>Run AMR gene scan</b> in <i>Setup → 3 · Options</i> and re-run.</p>';
+    }
     if (summaryEl) summaryEl.textContent = '';
     return;
   }
@@ -627,7 +638,7 @@ function renderAmrMatrix() {
     html.push('</tr>');
   }
   html.push('</tbody></table>');
-  root.innerHTML = html.join('');
+  root.innerHTML = banner + html.join('');
 }
 
 // Sidebar AMR filter wiring — anything that changes re-renders the matrix.
