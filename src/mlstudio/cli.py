@@ -16,9 +16,12 @@ from rich.table import Table
 from mlstudio import __version__
 from mlstudio.schemes.bigsdb import REGISTRY, list_local, pull_scheme
 
+AUTHOR_BYLINE = "Developed by Giovanni Lorenzin"
+
 app = typer.Typer(
     name="mlstudio",
-    help="MLST / cgMLST typing and interactive MST visualization.",
+    help=("MLST / cgMLST typing and interactive MST visualization.\n\n"
+          f"{AUTHOR_BYLINE}."),
     no_args_is_help=True,
     add_completion=False,
 )
@@ -41,7 +44,7 @@ def _setup_logging(verbose: bool) -> None:
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"mlstudio {__version__}")
+        console.print(f"mlstudio {__version__}  ·  {AUTHOR_BYLINE}")
         raise typer.Exit()
 
 
@@ -81,7 +84,8 @@ def gui(
     url = f"http://{host}:{port}/"
     if folder:
         url += f"?folder={folder.absolute()}"
-    console.print(f"[cyan]MLSTudio[/cyan] serving on [bold]{url}[/bold]")
+    console.print(f"[cyan]MLSTudio[/cyan] {__version__}  ·  {AUTHOR_BYLINE}")
+    console.print(f"  serving on [bold]{url}[/bold]")
     if open_browser:
         webbrowser.open(url)
     uvicorn.run(app_obj, host=host, port=port, log_level="warning")
@@ -120,6 +124,58 @@ def schemes_pull(
     """Download a scheme from PubMLST / BIGSdb-Pasteur."""
     scheme = pull_scheme(key, force=force)
     console.print(f"[green]✓[/green] {scheme.name} ({len(scheme.loci)} loci) cached at {scheme.root}")
+
+
+# cgMLST.org slugs for the ESKAPEE pathogens (the WHO priority list of
+# nosocomial pathogens). Enterobacter is represented by E. hormaechei, the
+# most clinically relevant Enterobacter cgMLST scheme on cgMLST.org.
+ESKAPEE_SLUGS: list[tuple[str, str]] = [
+    ("Efaecium",           "Enterococcus faecium"),
+    ("Saureus",            "Staphylococcus aureus"),
+    ("Kpneumoniae_complex","Klebsiella pneumoniae / variicola / quasipneumoniae"),
+    ("Abaumannii",         "Acinetobacter baumannii"),
+    ("Paeruginosa",        "Pseudomonas aeruginosa"),
+    ("Ehormaechei",        "Enterobacter hormaechei"),
+    ("Ecoli",              "Escherichia coli"),
+]
+
+
+@schemes_app.command("pull-eskapee")
+def schemes_pull_eskapee(
+    force: bool = typer.Option(False, "--force",
+                                help="Re-download even if a scheme is already cached."),
+    skip_failures: bool = typer.Option(True, "--skip-failures/--fail-fast",
+                                        help="Continue past schemes that fail to download."),
+) -> None:
+    """Bulk-pull all 7 ESKAPEE cgMLST schemes from cgMLST.org.
+
+    These are the WHO priority nosocomial pathogens — having them pre-cached
+    means MLSTudio is immediately useful on a typical clinical-micro install.
+    Total download is ~1–2 GB; everything lands under the local scheme cache
+    and is reusable across all subsequent analyses.
+    """
+    from mlstudio.schemes.cgmlst_org import pull_cgmlst_org_scheme
+
+    ok: list[str] = []
+    fail: list[tuple[str, str]] = []
+    for slug, organism in ESKAPEE_SLUGS:
+        console.print(f"[bold]→[/bold] {organism}  [dim]({slug})[/dim]")
+        try:
+            scheme = pull_cgmlst_org_scheme(slug=slug, organism=organism, force=force)
+            console.print(f"  [green]✓[/green] {len(scheme.loci)} loci cached at {scheme.root}")
+            ok.append(slug)
+        except Exception as e:  # noqa: BLE001 — surface every failure mode
+            console.print(f"  [red]✗[/red] {e}")
+            fail.append((slug, str(e)))
+            if not skip_failures:
+                raise typer.Exit(1)
+
+    console.print(f"\nDone. [green]{len(ok)}/{len(ESKAPEE_SLUGS)}[/green] schemes ready.")
+    if fail:
+        console.print("[yellow]The following failed — see `--help` of `schemes pull`"
+                      " or fetch the offline bundle (README → Manual scheme install):[/yellow]")
+        for slug, msg in fail:
+            console.print(f"  • {slug}: {msg}")
 
 
 @schemes_app.command("build-adhoc")

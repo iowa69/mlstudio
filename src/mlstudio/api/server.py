@@ -271,7 +271,12 @@ def create_app() -> FastAPI:
     # ---- meta -----------------------------------------------------------
     @app.get("/api/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+        return {
+            "status": "ok",
+            "version": __version__,
+            "author": "Giovanni Lorenzin",
+            "byline": "Developed by Giovanni Lorenzin",
+        }
 
     @app.get("/api/schemes")
     async def schemes() -> dict[str, Any]:

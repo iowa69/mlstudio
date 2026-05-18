@@ -130,7 +130,39 @@
         <div class="row"><span class="muted small">Hide edges above</span><span id="threshold-val">100</span></div>
       </label>
       <label class="check"><input type="checkbox" id="show-labels" checked /> Show sample labels</label>
+
+      <label class="field">
+        <span>Layout algorithm</span>
+        <select id="layout-algo">
+          <option value="fcose" selected>fcose — force-directed, edge length ∝ distance (default)</option>
+          <option value="radial">radial tree — deterministic, crossing-free</option>
+          <option value="cose">cose — simpler force layout</option>
+          <option value="circle">circle — every node on a ring</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Layout iterations</span>
+        <input id="layout-iter" type="range" min="500" max="10000" step="500" value="3000" />
+        <div class="row"><span class="muted small">more = better packing, slower</span><span id="layout-iter-val">3000</span></div>
+      </label>
+      <label class="field">
+        <span>Node size scale</span>
+        <input id="node-scale" type="range" min="0.5" max="2.0" step="0.05" value="1.0" />
+        <div class="row"><span class="muted small">× auto-tuned radius</span><span id="node-scale-val">1.0×</span></div>
+      </label>
+      <label class="field">
+        <span>Label font scale</span>
+        <input id="label-scale" type="range" min="0.5" max="2.0" step="0.05" value="1.0" />
+        <div class="row"><span class="muted small">× auto-tuned font size</span><span id="label-scale-val">1.0×</span></div>
+      </label>
+      <label class="field">
+        <span>Edge width scale</span>
+        <input id="edge-scale" type="range" min="0.5" max="3.0" step="0.1" value="1.0" />
+        <div class="row"><span class="muted small">× auto-tuned edge thickness</span><span id="edge-scale-val">1.0×</span></div>
+      </label>
+
       <button id="relax-btn" class="ghost">Relax layout</button>
+      <button id="rerender-btn" class="ghost">Re-render</button>
       <button id="fit-btn" class="ghost">Fit to screen</button>
       <button id="export-png" class="ghost">Export PNG</button>
       <button id="export-svg" class="ghost">Export SVG</button>
@@ -234,6 +266,11 @@
     </table>
   </div>
 </section>
+
+<footer class="app-footer">
+  <span class="byline">MLSTudio · Developed by <strong>Giovanni Lorenzin</strong></span>
+  <span class="byline-dim" id="footer-version"></span>
+</footer>
 
 <script src="/static/app.js"></script>
 </body>

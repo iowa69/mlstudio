@@ -623,7 +623,9 @@ function computeClusters(mst, threshold) {
 // ---- MST rendering ---------------------------------------------------------
 
 // Auto-tune visual parameters based on dataset size so the layout stays
-// legible from 5 to 5000 isolates.
+// legible from 5 to 5000 isolates. User-visible sliders in the Display panel
+// multiply nodeSize / fontSize / edgeMax on top of these defaults — see
+// `applyUserScale`.
 function autoScale(nNodes) {
   if (nNodes <= 30) return { nodeSize: 50, fontSize: 14, edgeLabel: true,
                               labels: true, ideal: 170, repulse: 32000, edgeMax: 5.5 };
@@ -635,6 +637,20 @@ function autoScale(nNodes) {
                               labels: false, ideal: 90, repulse: 9000, edgeMax: 2.2 };
   return { nodeSize: 11, fontSize: 10, edgeLabel: false, labels: false,
            ideal: 65, repulse: 6000, edgeMax: 1.5 };
+}
+
+// Read user multipliers from the Display sliders. Defaults all 1.0× so a
+// fresh page behaves exactly like the previous auto-only version.
+function applyUserScale(scale) {
+  const nodeM = parseFloat($('node-scale')?.value) || 1.0;
+  const fontM = parseFloat($('label-scale')?.value) || 1.0;
+  const edgeM = parseFloat($('edge-scale')?.value) || 1.0;
+  return {
+    ...scale,
+    nodeSize: scale.nodeSize * nodeM,
+    fontSize: scale.fontSize * fontM,
+    edgeMax: scale.edgeMax * edgeM,
+  };
 }
 
 // Kept as a fallback. Not the primary layout — MSTs are centroid-free by
@@ -748,6 +764,27 @@ function mstLayout(nNodes, scale, elements) {
   // get a visible gap, and capped to keep very-distant edges sane.
   const wToPx = (w) => Math.min(420, 40 + w * 4);
 
+  // User can override the algorithm choice from the Display panel.
+  const userAlgo = $('layout-algo')?.value || 'fcose';
+  const userIter = parseInt($('layout-iter')?.value) || (nNodes <= 100 ? 5000 : 3000);
+
+  if (userAlgo === 'radial') {
+    const positions = radialTreeLayout(elements, scale);
+    return { name: 'preset', positions: (n) => positions[n.id()] || { x: 0, y: 0 },
+             fit: true, padding: 60, animate: false };
+  }
+  if (userAlgo === 'circle') {
+    return { name: 'circle', fit: true, padding: 60, animate: false, avoidOverlap: true };
+  }
+  if (userAlgo === 'cose') {
+    return {
+      name: 'cose', animate: false, fit: true, padding: 60,
+      idealEdgeLength: (edge) => wToPx(edge.data('weight') || 1),
+      nodeRepulsion: () => scale.repulse,
+      numIter: userIter,
+    };
+  }
+  // Default: fcose (or radial fallback if extension didn't register)
   if (hasFcose()) {
     return {
       name: 'fcose',
@@ -765,7 +802,7 @@ function mstLayout(nNodes, scale, elements) {
       gravity: 0.18,
       gravityRange: 3.5,
       gravityCompound: 1.0,
-      numIter: nNodes <= 100 ? 5000 : 3000,
+      numIter: userIter,
       tile: false,
       uniformNodeDimensions: false,
       packComponents: true,
@@ -788,7 +825,7 @@ function renderMst() {
   $('threshold').value = state.maxEdge;
   $('threshold-val').textContent = state.maxEdge;
 
-  const scale = autoScale(nNodes);
+  const scale = applyUserScale(autoScale(nNodes));
   state.scale = scale;
   // Respect user override on labels checkbox; otherwise use scale default.
   const userOverride = $('show-labels').dataset.userSet === '1';
@@ -1215,10 +1252,41 @@ $('fit-btn').addEventListener('click', () => state.cy && state.cy.fit(null, 50))
 $('relax-btn').addEventListener('click', () => {
   if (!state.cy) return;
   const nNodes = state.cy.nodes(':childless').length;
-  const scale = autoScale(nNodes);
+  const scale = applyUserScale(autoScale(nNodes));
   const layout = mstLayout(nNodes, scale, state.mst.elements);
   state.cy.layout({ ...layout, randomize: true }).run();
   setTimeout(redrawHulls, 700);
+});
+
+// Re-render: apply size / label / edge / layout changes without re-running
+// the full analysis. Cheap — just rebuilds the Cytoscape instance from cached
+// MST state with whatever the user picked in the Display sliders.
+$('rerender-btn').addEventListener('click', () => {
+  if (!state.mst) return;
+  renderMst();
+});
+
+// Live-update value readouts next to the new Display sliders. None of these
+// trigger a re-render on their own — user clicks "Re-render" or "Relax
+// layout" to apply, which keeps slider drags from being expensive on big
+// datasets.
+function _liveReadout(inputId, valId, fmt) {
+  const inp = $(inputId);
+  const out = $(valId);
+  if (!inp || !out) return;
+  const update = () => { out.textContent = fmt(inp.value); };
+  inp.addEventListener('input', update);
+  update();
+}
+_liveReadout('layout-iter',  'layout-iter-val',  v => v);
+_liveReadout('node-scale',   'node-scale-val',   v => parseFloat(v).toFixed(2) + '×');
+_liveReadout('label-scale',  'label-scale-val',  v => parseFloat(v).toFixed(2) + '×');
+_liveReadout('edge-scale',   'edge-scale-val',   v => parseFloat(v).toFixed(1) + '×');
+
+// Layout-algorithm change re-renders immediately (it changes the topology
+// of where nodes land, which the user expects to see right away).
+$('layout-algo')?.addEventListener('change', () => {
+  if (state.mst) renderMst();
 });
 
 // Auto-lock dragged nodes (Ridom convention: manual drag = pinned)
@@ -1400,6 +1468,13 @@ subscribe = function(jobId) {
 
 loadCatalog().catch(e => console.error(e));
 loadProjects().catch(e => console.error(e));
+
+// Footer byline — fetch from the server so the version stays in lockstep with
+// the installed package, not the frontend bundle.
+api('/health').then(h => {
+  const el = $('footer-version');
+  if (el && h?.version) el.textContent = `v${h.version}`;
+}).catch(() => { /* footer already has the byline; version is optional */ });
 
 // Auto-fill folder from ?folder= URL param
 const urlParams = new URLSearchParams(location.search);

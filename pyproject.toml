@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mlstudio"
-version = "0.1.0"
+version = "1.3.0"
 description = "Free, open-source MLST/cgMLST typing and interactive MST visualization for Linux."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-authors = [{ name = "iowa69", email = "sintetico87@gmail.com" }]
+authors = [{ name = "Giovanni Lorenzin", email = "sintetico87@gmail.com" }]
 keywords = ["mlst", "cgmlst", "bioinformatics", "bacterial-typing", "minimum-spanning-tree"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",

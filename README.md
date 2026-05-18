@@ -87,6 +87,63 @@ The catalog (panel 6 in the sidebar) lists every scheme MLSTudio knows about. Cl
 
 Adding more schemes is a one-line edit to `src/mlstudio/schemes/bigsdb.py`'s `REGISTRY`.
 
+### ESKAPEE cgMLST in one command
+
+The seven [WHO-priority ESKAPEE](https://en.wikipedia.org/wiki/ESKAPE) nosocomial pathogens — *E. faecium, S. aureus, K. pneumoniae, A. baumannii, P. aeruginosa, Enterobacter (E. hormaechei), E. coli* — are the most-typed organisms in clinical microbiology. Pull all seven cgMLST schemes from [cgMLST.org](https://www.cgmlst.org/) at once:
+
+```bash
+mlstudio schemes pull-eskapee
+```
+
+Total download is roughly 1–2 GB. Everything is cached under `~/.local/share/mlstudio/schemes/` and reused across every subsequent analysis.
+
+| Pathogen | cgMLST.org slug | Local key |
+|----------|-----------------|-----------|
+| *Enterococcus faecium* | `Efaecium` | `efaecium_cgmlst_orgio` |
+| *Staphylococcus aureus* | `Saureus` | `saureus_cgmlst_orgio` |
+| *Klebsiella pneumoniae* complex | `Kpneumoniae_complex` | `kpneumoniae_complex_cgmlst_orgio` |
+| *Acinetobacter baumannii* | `Abaumannii` | `abaumannii_cgmlst_orgio` |
+| *Pseudomonas aeruginosa* | `Paeruginosa` | `paeruginosa_cgmlst_orgio` |
+| *Enterobacter hormaechei* | `Ehormaechei` | `ehormaechei_cgmlst_orgio` |
+| *Escherichia coli* | `Ecoli` | `ecoli_cgmlst_orgio` |
+
+### Offline / manual scheme install
+
+If `pull-eskapee` fails — slow network, firewall, cgMLST.org temporarily down — there is a "legacy" offline tarball attached to each [GitHub release](https://github.com/iowa69/mlstudio/releases) of MLSTudio. It is a snapshot of the scheme cache produced on a healthy network by `scripts/bundle_eskapee_schemes.sh`.
+
+Install it by hand:
+
+```bash
+# 1. Grab the tarball from the latest GitHub release
+curl -LO https://github.com/iowa69/mlstudio/releases/latest/download/mlstudio-eskapee-schemes.tar.zst
+
+# 2. Make sure the scheme cache directory exists
+mkdir -p ~/.local/share/mlstudio/schemes
+
+# 3. Untar it into the cache (one directory per scheme appears under ./schemes/)
+tar --use-compress-program=unzstd -xf mlstudio-eskapee-schemes.tar.zst \
+    -C ~/.local/share/mlstudio/schemes
+
+# 4. Sanity check
+mlstudio schemes list      # should now show all 7 cached ✓
+```
+
+You can also drop **any** custom or hand-built scheme into the cache by following the same layout. Every scheme directory has the shape:
+
+```
+~/.local/share/mlstudio/schemes/<key>/
+├── manifest.json          # scheme metadata (organism, kind, loci, locus sha256s)
+├── loci/                  # one FASTA per locus
+│   ├── <locus1>.fasta
+│   ├── <locus2>.fasta
+│   └── …
+└── profiles.tsv           # ST → allele profile table (cgMLST schemes ship a header-only file)
+```
+
+The minimum required for a working scheme is a valid `manifest.json` plus the per-locus FASTAs under `loci/`. The simplest way to produce one yourself is `mlstudio schemes build-adhoc --reference <ref.fasta> --key mygenus_v1 --organism "My genus"`.
+
+The `MLSTUDIO_CACHE_DIR` environment variable overrides the cache location if you want schemes on a shared filesystem.
+
 ## Working with the tree
 
 | Action | How |
@@ -201,12 +258,13 @@ cgMLST scales to 1000+ loci via a **single concatenated BLAST database** per sch
 
 - [ ] Bowtie2 read-backed rescue for missing/spurious alleles
 - [ ] Species auto-detection from the assembly (BLAST against all cached scheme allele DBs in parallel)
-- [ ] SVG export
-- [ ] Pie-chart composite nodes when grouping by metadata field
-- [ ] Bioconda package + AppImage
+- [x] SVG export
+- [x] Pie-chart composite nodes when grouping by metadata field
+- [x] Bioconda recipe (staged in `recipe/`, PR pending the first PyPI release)
+- [ ] AppImage
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
-Built by [@iowa69](https://github.com/iowa69).
+**Developed by Giovanni Lorenzin** ([@iowa69](https://github.com/iowa69)).
