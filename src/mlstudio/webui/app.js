@@ -1150,17 +1150,21 @@ function ensureHullCanvas() {
     hullCanvas = document.createElement('canvas');
     hullCanvas.style.position = 'absolute';
     hullCanvas.style.inset = '0';
+    // pointer-events:none lets clicks/wheel pass straight through to the
+    // Cytoscape canvases underneath, so zoom / pan / drag remain interactive.
     hullCanvas.style.pointerEvents = 'none';
-    hullCanvas.style.zIndex = '0';
+    hullCanvas.style.zIndex = '1';
     hullCtx = hullCanvas.getContext('2d');
     new ResizeObserver(resizeHullCanvas).observe(cyDiv);
   }
   // Re-attach if Cytoscape's destroy()/init pass removed our canvas from the
-  // DOM. Without this, halos vanish on every re-render. Prepend so the canvas
-  // sits *below* Cytoscape's own canvases — the halo paints behind nodes
-  // instead of obscuring them.
+  // DOM. Without this, halos vanish on every re-render. Append (not
+  // prepend) — this is the layering that worked in the original
+  // implementation: hull canvas sits *above* Cytoscape's canvases at
+  // z-index:1 but with pointer-events:none, so the halo paints over the
+  // tree visually while every interaction still reaches Cytoscape.
   if (hullCanvas.parentNode !== cyDiv) {
-    cyDiv.insertBefore(hullCanvas, cyDiv.firstChild);
+    cyDiv.appendChild(hullCanvas);
   }
   resizeHullCanvas();
 }
