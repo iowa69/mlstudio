@@ -1,6 +1,6 @@
 # MLSTudio Roadmap
 
-> Living document. Last updated: 2026-05-17.
+> Living document. Last updated: 2026-05-18.
 
 ## Vision
 
@@ -80,43 +80,42 @@ A polished, integrated Linux desktop experience for bacterial MLST / cgMLST typi
 - Live threshold slider, metadata CSV upload, color-by-field, PNG export
 - `mlstudio gui [folder]` launches the experience
 
-### M3 — cgMLST calling with rescue
-- Two-stage call: BLAST primary → Bowtie2 read-backed rescue for missing/spurious loci
-- Configurable identity/coverage thresholds
-- Smart caching: skip recomputation for unchanged inputs
+### M3 — cgMLST calling 🟡 partial
+- ✅ Batched BLAST primary call (100 loci per DB, RAM-bounded)
+- ✅ Configurable identity / coverage thresholds, EXC / INF / LNF flagging
+- ✅ Smart caching: BLAST DBs rebuilt only when scheme manifest changes
+- ⏳ Bowtie2 read-backed rescue for missing/spurious loci — *deferred to post-v0.1.0*
 
-### M4 — AMRFinderPlus integration
-- Auto-install AMRFinderPlus database
-- Run alongside typing, join results into the profile table
-- GUI panel: per-isolate AMR gene/mutation summary
+### M4 — AMRFinderPlus integration ✅
+- `amrfinder` wrapper with per-organism config and tolerant TSV parsing
+- Run alongside typing inside the analyze job; results carried on the job snapshot
+- ⏳ Auto-install of the AMRFinderPlus DB — manual `amrfinder -u` for now
 
-### M5 — Profile DB + distance polish
-- SQLite schema: isolates, profiles, metadata, AMR hits, scheme version
-- Vectorized Hamming over numpy/numba
-- goeBURST tie-breaking on MST construction
+### M5 — Profile DB + distance polish 🟡 partial
+- ✅ Vectorized Hamming distance + goeBURST-style tie-breaking on MST construction
+- ⏳ SQLite schema (isolates, profiles, metadata, AMR hits, scheme version) — runs are still in-memory per analyze job
 
-### M6 — Species auto-detection
+### M6 — Species auto-detection ⏳
 - Identify organism from assembly by hitting all locally-cached scheme allele DBs in parallel
 - Pick the scheme with the most high-identity hits across its loci
 - Fall back to a manual scheme picker when ambiguous
 
-### M7 — Cytoscape.js polish 🎯 differentiator
-- Stable layout with random-seed pinning
-- Drag nodes / pin positions / lasso selection
-- Pie-chart composite nodes when grouping samples
-- Minimap, smooth zoom & pan
-- Export: SVG, PNG (high-DPI), GraphML, Newick
+### M7 — Cytoscape.js polish 🎯 differentiator ✅
+- ✅ fcose layout with deterministic seeding, non-tree edges, cluster hulls
+- ✅ Drag / pin / lasso selection, Ridom-style merged-genotype pie nodes
+- ✅ Live threshold slider, metadata coloring, halos
+- ✅ Export: PNG (high-DPI), SVG
+- ⏳ GraphML / Newick export
 
-### M8 — Project workspace
-- Save/load project files (`.mlsproj` = zip of SQLite + metadata + figures)
-- Metadata import (CSV/TSV, Excel)
-- Custom color rules
-- Comparison view: two MSTs side-by-side
+### M8 — Project workspace ✅
+- ✅ Save/load project files
+- ✅ Metadata import (CSV/TSV)
+- ⏳ Side-by-side MST comparison view
 
-### M9 — Packaging
-- Bioconda recipe for the engine
-- AppImage for the bundled GUI
-- Documentation site (mkdocs-material)
+### M9 — Packaging ⏳
+- ⏳ Bioconda recipe — version pinned to 0.1.0 in pyproject, `meta.yaml` not yet written
+- ⏳ AppImage for the bundled GUI
+- ⏳ Documentation site (mkdocs-material)
 
 ### M10 — Benchmark paper
 - Datasets: published outbreak panels (Listeria, S. aureus, K. pneumoniae)

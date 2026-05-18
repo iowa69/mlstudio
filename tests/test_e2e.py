@@ -88,7 +88,8 @@ async def test_api_full_pipeline() -> None:
                     if "source" not in el["data"]}
         assert node_ids == {"EGD-e", "10403S", "F2365"}
         edges = [el for el in snap["mst"]["elements"] if "source" in el["data"]]
-        assert len(edges) == 2  # n-1 edges for n=3 nodes in an MST
-        for e in edges:
+        tree_edges = [e for e in edges if e["data"].get("kind") == "tree"]
+        assert len(tree_edges) == 2  # n-1 tree edges for n=3 nodes in an MST
+        for e in tree_edges:
             assert e["data"]["weight"] > 0  # distinct STs => positive distance
     JOBS.clear()
