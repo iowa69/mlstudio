@@ -118,11 +118,32 @@ def schemes_list(remote: bool = typer.Option(False, "--remote", help="Show regis
 
 @schemes_app.command("pull")
 def schemes_pull(
-    key: str = typer.Argument(..., help="Scheme registry key (see `schemes list --remote`)."),
+    key: str = typer.Argument(..., help="Scheme registry key (BIGSdb) or cgMLST.org slug (e.g. 'Efaecium')."),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
-    """Download a scheme from PubMLST / BIGSdb-Pasteur."""
-    scheme = pull_scheme(key, force=force)
+    """Download a scheme from PubMLST / BIGSdb-Pasteur / cgMLST.org."""
+    from mlstudio.schemes.bigsdb import REGISTRY
+    if key in REGISTRY:
+        scheme = pull_scheme(key, force=force)
+    else:
+        # Fall through to cgMLST.org. Accept either the bare slug ("Efaecium")
+        # or the local cache key ("efaecium_cgmlst_orgio").
+        from mlstudio.schemes.cgmlst_org import pull_cgmlst_org_scheme, load_registry
+        slug = key
+        if key.endswith("_cgmlst_orgio"):
+            slug_lower = key[: -len("_cgmlst_orgio")]
+            # cgmlst.org slugs are CamelCase; find the canonical one.
+            slug = next((s["slug"] for s in load_registry()
+                         if s["slug"].lower() == slug_lower), slug_lower)
+        try:
+            scheme = pull_cgmlst_org_scheme(slug=slug, force=force)
+        except Exception as e:
+            raise typer.BadParameter(
+                f"'{key}' is not in the BIGSdb registry and isn't a known "
+                f"cgMLST.org slug. Run `mlstudio schemes pull-eskapee` for "
+                f"the 7 WHO-priority cgMLST schemes, or pass a cgMLST.org "
+                f"slug like 'Efaecium' or 'Saureus'. Error: {e}"
+            )
     console.print(f"[green]✓[/green] {scheme.name} ({len(scheme.loci)} loci) cached at {scheme.root}")
 
 
