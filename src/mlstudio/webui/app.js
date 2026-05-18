@@ -425,15 +425,32 @@ function activateTab(t) {
     panel.style.display = (tags.length === 0 || tags.includes(t)) ? '' : 'none';
   });
   if (t === 'table') renderComparisonTable();
-  if (t === 'stats') renderStats();
-  if (t === 'amr')   renderAmrMatrix();
-  if (t === 'tree' && state.cy) {
-    // Resize + refit when becoming visible — Cytoscape sometimes ends up
-    // sized to a hidden container if the tab was inactive at init time.
-    state.cy.resize();
-    state.cy.fit(null, 50);
-    redrawHulls();
-    updateZoomReadout();
+  else if (t === 'stats') renderStats();
+  else if (t === 'amr')   renderAmrMatrix();
+  else if (t === 'tree') {
+    // Cytoscape's internal canvases sized themselves while the pane was
+    // hidden — calling resize() synchronously now sees the *old* (often
+    // zero) dimensions because the browser hasn't applied display:block
+    // yet. requestAnimationFrame waits for the layout pass so resize()
+    // measures the actual visible size. Without this, switching away from
+    // and back to the MST tab leaves it blank and "frozen" (no events,
+    // no nodes), which is exactly what the user reported.
+    requestAnimationFrame(() => {
+      if (!state.cy && state.mst) {
+        // The Cytoscape instance got nuked at some point but we still
+        // have the MST data — rebuild from scratch instead of showing
+        // an empty canvas the user can't recover from.
+        renderMst();
+        return;
+      }
+      if (state.cy) {
+        ensureHullCanvas();      // re-attach the halo overlay if needed
+        state.cy.resize();
+        state.cy.fit(null, 50);
+        redrawHulls();
+        updateZoomReadout();
+      }
+    });
   }
 }
 document.querySelectorAll('.tab').forEach(btn => {
