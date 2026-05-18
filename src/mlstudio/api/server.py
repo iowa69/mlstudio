@@ -313,7 +313,8 @@ async def _run_job(job: Job) -> None:
                     "sample": result.sample,
                     "st": result.st,
                     "scheme": result.scheme,
-                    "cgst": result.cgst,
+                    "cgst": result.cgst,           # 8-char hash
+                    "cgst_id": None,                # sequential int filled in post-MST
                     "mlst_st": result.mlst_st,
                     "mlst_scheme": result.mlst_scheme,
                     "clonal_complex": result.clonal_complex,
@@ -350,15 +351,32 @@ async def _run_job(job: Job) -> None:
                 members_by_rep=members_by_rep,
                 non_tree_pairs=nt_pairs,
             )
+            # Persistent local nomenclature: stable cgST integers + HC
+            # cluster IDs that stay consistent across runs against this
+            # scheme on this machine. NOT globally curated like Ridom CTs
+            # or Enterobase HCs — those need a central server — but the
+            # numbering is reproducible for the user's own lab work.
+            from mlstudio.nomenclature import NomenclatureStore
+            store = NomenclatureStore(job.scheme_key)
+            cgst_int_by_sample: dict[str, int] = {}
+            for r in job.results:
+                h = r.get("cgst")
+                if h:
+                    cgst_int_by_sample[r["sample"]] = store.assign_cgst(h)
             # HierCC-style hierarchical cluster IDs (Enterobase nomenclature).
             # For each Enterobase-style threshold {0, 2, 5, 10, 25, 50}, find
-            # connected components on the complete pairwise-distance graph and
-            # number them by size desc. Attach to each sample's result so the
-            # Table tab can render HC0/HC2/HC5/HC10/HC25/HC50 columns.
+            # connected components on the complete pairwise-distance graph
+            # then push them through the nomenclature store so the numbers
+            # stick across runs.
             hier_thresholds = [0, 2, 5, 10, 25, 50]
-            hier_by_sample = _hier_clusters(dm, members_by_rep, hier_thresholds)
+            hier_by_sample = _hier_clusters(
+                dm, members_by_rep, hier_thresholds,
+                store=store, cgst_int_by_sample=cgst_int_by_sample,
+            )
             for r in job.results:
                 r["hier"] = hier_by_sample.get(r["sample"], {})
+                if r["sample"] in cgst_int_by_sample:
+                    r["cgst_id"] = cgst_int_by_sample[r["sample"]]
         else:
             sname = next(iter(profiles.keys()))
             job.mst = {"elements": [{"data": {
@@ -885,21 +903,22 @@ def _hier_clusters(
     dm: Any,
     members_by_rep: dict[str, list[str]],
     thresholds: list[int],
+    *,
+    store: Any = None,
+    cgst_int_by_sample: dict[str, int] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Compute HierCC-style cluster IDs per sample at multiple thresholds.
 
-    For each threshold, build a graph over the merged-profile representatives
-    where an edge connects two reps iff their allele distance ≤ threshold.
-    Connected components are the clusters; they are numbered by size desc
-    (then by min sample ID) so the largest cluster at every level is "1".
-    Identical-profile groups inherit their rep's cluster ID at every level.
-
-    Returns `{sample: {"HC0": "1", "HC2": "1", "HC5": "1", …}}`.
+    With a NomenclatureStore, cluster IDs persist across runs against the
+    same scheme — an outbreak group keeps its number when you add more
+    isolates later. Without a store, IDs are numbered fresh per run.
     """
     if dm is None or dm.n == 0:
         return {}
     samples = list(dm.samples)
     out: dict[str, dict[str, str]] = {s: {} for rep in members_by_rep for s in members_by_rep[rep]}
+    cgst_int_by_sample = cgst_int_by_sample or {}
+
     def _find(parent: dict[str, str], x: str) -> str:
         while parent[x] != x:
             parent[x] = parent[parent[x]]
@@ -918,13 +937,26 @@ def _hier_clusters(
         groups: dict[str, list[str]] = {}
         for s in samples:
             groups.setdefault(_find(parent, s), []).append(s)
-        # Numbering: largest cluster first, ties broken by min sample id.
-        ordered = sorted(groups.values(), key=lambda g: (-len(g), min(g)))
+
         rep_to_id: dict[str, str] = {}
-        for idx, grp in enumerate(ordered, start=1):
-            for rep in grp:
-                rep_to_id[rep] = str(idx)
-        # Expand reps back to all original samples sharing that rep.
+        if store is not None and cgst_int_by_sample:
+            # Persistent IDs: each component is pushed through the store
+            # which merges with any existing cluster that shares cgST IDs.
+            for grp in groups.values():
+                cgst_ids = [cgst_int_by_sample[s] for s in grp
+                            if s in cgst_int_by_sample]
+                if not cgst_ids:
+                    continue
+                cid = store.assign_cluster(th, cgst_ids)
+                for rep in grp:
+                    rep_to_id[rep] = str(cid)
+        else:
+            # Fresh-per-run numbering: largest cluster first.
+            ordered = sorted(groups.values(), key=lambda g: (-len(g), min(g)))
+            for idx, grp in enumerate(ordered, start=1):
+                for rep in grp:
+                    rep_to_id[rep] = str(idx)
+
         for rep, members in members_by_rep.items():
             cid = rep_to_id.get(rep, "?")
             for s in members:

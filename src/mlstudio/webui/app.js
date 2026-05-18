@@ -506,7 +506,14 @@ function renderComparisonTable() {
   if (anyCgst) {
     cols.push({
       key: 'cgst', label: 'cgST', cls: '',
-      getter: r => r.cgst ? `<code class="cgst">${r.cgst}</code>` : '—',
+      getter: r => {
+        if (r.cgst_id) {
+          // Sequential integer is what the user actually reads ("cgST 7");
+          // the hash is shown as a smaller tooltip for cross-run lookups.
+          return `<span class="cgst-num" title="profile hash: ${r.cgst || ''}">${r.cgst_id}</span>`;
+        }
+        return r.cgst ? `<code class="cgst">${r.cgst}</code>` : '—';
+      },
     });
   }
   if (anyHier) {
@@ -1068,15 +1075,18 @@ function renderMst() {
   const initialField = $('color-field').value || 'st';
   state.currentPalette = paletteFor(state.mst.elements, initialField);
 
-  // Build a lookup: sample → "[ST X · CC17]" or "[cgST Y]" so the node
+  // Build a lookup: sample → "[ST X · CC17]" or "[cgST 12]" so the node
   // label carries the typing result inline. Prefer the classical ST when
-  // present (more familiar to clinicians); fall back to the cgST hash
-  // otherwise. Clonal complex annotation is appended when available.
+  // present (more familiar to clinicians); fall back to the integer cgST
+  // (stable across runs on this machine) when not. Clonal complex
+  // annotation is appended when available.
   const typeSuffix = {};
   for (const r of (state.results || [])) {
     if (r.st) {
       const cc = r.clonal_complex ? ` · ${r.clonal_complex}` : '';
       typeSuffix[r.sample] = ` [ST ${r.st}${cc}]`;
+    } else if (r.cgst_id) {
+      typeSuffix[r.sample] = ` [cgST ${r.cgst_id}]`;
     } else if (r.cgst) {
       typeSuffix[r.sample] = ` [cgST ${r.cgst}]`;
     }
